@@ -1,9 +1,13 @@
+"use strict";
+
 const express = require("express");
 const multer = require("multer");
 const dotenv = require("dotenv");
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
+const crypto = require("crypto");
+const { pipeline } = require("stream/promises");
 
 const {
     S3Client,
@@ -13,248 +17,399 @@ const {
     AbortMultipartUploadCommand,
     GetObjectCommand,
     DeleteObjectCommand,
-    ListObjectsV2Command,
-    HeadObjectCommand
+    ListObjectsV2Command
 } = require("@aws-sdk/client-s3");
 
 dotenv.config();
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+
 
 // =====================================================
-// BACKBLAZE B2 CONFIGURATION
+// PORT
 // =====================================================
 
-const REGION = process.env.B2_REGION;
-const ENDPOINT = process.env.B2_ENDPOINT;
-const KEY_ID = process.env.B2_KEY_ID;
-const APPLICATION_KEY = process.env.B2_APPLICATION_KEY;
-const BUCKET_NAME = process.env.B2_BUCKET_NAME;
+const PORT =
+    Number(process.env.PORT) || 3000;
+
 
 // =====================================================
-// CHECK CONFIGURATION
+// BACKBLAZE CONFIGURATION
 // =====================================================
 
-if (
-    !REGION ||
-    !ENDPOINT ||
-    !KEY_ID ||
-    !APPLICATION_KEY ||
-    !BUCKET_NAME
-) {
+const REGION =
+    process.env.B2_REGION;
+
+const ENDPOINT =
+    process.env.B2_ENDPOINT;
+
+const KEY_ID =
+    process.env.B2_KEY_ID;
+
+const APPLICATION_KEY =
+    process.env.B2_APPLICATION_KEY;
+
+const BUCKET_NAME =
+    process.env.B2_BUCKET_NAME;
+
+
+// =====================================================
+// CONFIGURATION CHECK
+// =====================================================
+
+const missingConfiguration = [];
+
+if (!REGION) {
+    missingConfiguration.push("B2_REGION");
+}
+
+if (!ENDPOINT) {
+    missingConfiguration.push("B2_ENDPOINT");
+}
+
+if (!KEY_ID) {
+    missingConfiguration.push("B2_KEY_ID");
+}
+
+if (!APPLICATION_KEY) {
+    missingConfiguration.push("B2_APPLICATION_KEY");
+}
+
+if (!BUCKET_NAME) {
+    missingConfiguration.push("B2_BUCKET_NAME");
+}
+
+if (missingConfiguration.length > 0) {
+
     console.error("");
     console.error("========================================");
-    console.error("ERROR: Missing Backblaze configuration");
+    console.error("MISSING BACKBLAZE CONFIGURATION");
     console.error("========================================");
-    console.error("");
-    console.error("Required variables:");
-    console.error("B2_REGION");
-    console.error("B2_ENDPOINT");
-    console.error("B2_KEY_ID");
-    console.error("B2_APPLICATION_KEY");
-    console.error("B2_BUCKET_NAME");
+    console.error(
+        missingConfiguration.join(", ")
+    );
     console.error("");
 
     process.exit(1);
 }
 
+
 // =====================================================
 // BACKBLAZE S3 CLIENT
 // =====================================================
 
-const s3 = new S3Client({
-    region: REGION,
-    endpoint: ENDPOINT,
+const s3 =
+    new S3Client({
 
-    credentials: {
-        accessKeyId: KEY_ID,
-        secretAccessKey: APPLICATION_KEY
-    },
+        region:
+            REGION,
 
-    forcePathStyle: true,
+        endpoint:
+            ENDPOINT,
 
-    // SDK-level retries
-    maxAttempts: 5,
+        credentials: {
 
-    requestChecksumCalculation: "WHEN_REQUIRED",
-    responseChecksumValidation: "WHEN_REQUIRED"
-});
+            accessKeyId:
+                KEY_ID,
+
+            secretAccessKey:
+                APPLICATION_KEY
+        },
+
+        forcePathStyle:
+            true,
+
+        maxAttempts:
+            5,
+
+        requestChecksumCalculation:
+            "WHEN_REQUIRED",
+
+        responseChecksumValidation:
+            "WHEN_REQUIRED"
+    });
+
+
+// =====================================================
+// FRONTEND DIRECTORY
+// =====================================================
+
+const frontendPath =
+    path.resolve(
+        __dirname,
+        ".."
+    );
+
 
 // =====================================================
 // TEMPORARY UPLOAD DIRECTORY
 // =====================================================
 
-const tempDirectory = path.join(
-    os.tmpdir(),
-    "fileshare-uploads"
-);
+const tempDirectory =
+    path.join(
+        os.tmpdir(),
+        "fileshare-uploads"
+    );
 
-if (!fs.existsSync(tempDirectory)) {
-    fs.mkdirSync(tempDirectory, {
-        recursive: true
-    });
+if (
+    !fs.existsSync(
+        tempDirectory
+    )
+) {
+
+    fs.mkdirSync(
+        tempDirectory,
+        {
+            recursive: true
+        }
+    );
 }
 
-// =====================================================
-// MULTER
-// =====================================================
-
-const storage = multer.diskStorage({
-    destination: (req, file, cb) => {
-        cb(null, tempDirectory);
-    },
-
-    filename: (req, file, cb) => {
-        const uniqueName =
-            `${Date.now()}-${Math.random()
-                .toString(36)
-                .substring(2, 12)}`;
-
-        cb(null, uniqueName);
-    }
-});
-
-const upload = multer({
-    storage: storage
-});
 
 // =====================================================
-// FRONTEND
+// MULTER STORAGE
 // =====================================================
 
-const frontendPath = path.join(
-    __dirname,
-    ".."
+const storage =
+    multer.diskStorage({
+
+        destination:
+            (req, file, cb) => {
+
+                cb(
+                    null,
+                    tempDirectory
+                );
+            },
+
+        filename:
+            (req, file, cb) => {
+
+                const uniqueName =
+                    `${Date.now()}-${crypto.randomBytes(8).toString("hex")}`;
+
+                cb(
+                    null,
+                    uniqueName
+                );
+            }
+    });
+
+
+const upload =
+    multer({
+
+        storage:
+
+            storage,
+
+        limits: {
+
+            // 10 GB maximum temporary upload size
+            fileSize:
+                10 *
+                1024 *
+                1024 *
+                1024
+        }
+    });
+
+
+// =====================================================
+// STATIC FRONTEND
+// =====================================================
+
+app.use(
+    express.static(
+        frontendPath
+    )
 );
 
-app.use(express.static(frontendPath));
 
-app.get("/", (req, res) => {
-    res.sendFile(
-        path.join(
-            frontendPath,
-            "index.html"
-        )
-    );
-});
+// =====================================================
+// HOME
+// =====================================================
+
+app.get(
+    "/",
+    (req, res) => {
+
+        res.sendFile(
+            path.join(
+                frontendPath,
+                "index.html"
+            )
+        );
+    }
+);
+
+
+// =====================================================
+// QR CODE
+// =====================================================
+
+app.get(
+    "/GooglePay_QR.png",
+    (req, res) => {
+
+        const qrPath =
+            path.join(
+                frontendPath,
+                "GooglePay_QR.png"
+            );
+
+        if (
+            !fs.existsSync(
+                qrPath
+            )
+        ) {
+
+            return res
+                .status(404)
+                .send(
+                    "QR code not found."
+                );
+        }
+
+        res.sendFile(
+            qrPath
+        );
+    }
+);
+
 
 // =====================================================
 // HEALTH CHECK
 // =====================================================
 
-app.get("/health", (req, res) => {
-    res.json({
-        status: "OK",
-        server: "FileShare",
-        backblaze: "configured"
-    });
-});
+app.get(
+    "/health",
+    (req, res) => {
+
+        res.json({
+
+            status:
+                "OK",
+
+            server:
+                "FileShare",
+
+            backblaze:
+                "configured",
+
+            download:
+                "enabled"
+        });
+    }
+);
+
 
 // =====================================================
 // AUTO DELETE SETTINGS
 // =====================================================
 
 const DELETE_TIMES = {
-    "600": 10 * 60,
-    "1800": 30 * 60,
-    "3600": 60 * 60
+
+    "600":
+        10 * 60,
+
+    "1800":
+        30 * 60,
+
+    "3600":
+        60 * 60
 };
+
 
 // =====================================================
 // MULTIPART SETTINGS
 // =====================================================
 
-// Each part = 10 MB
+// 10 MB per part
 const PART_SIZE =
-    10 * 1024 * 1024;
+    10 *
+    1024 *
+    1024;
 
-// Maximum 20 parts uploading simultaneously
-const CONCURRENT_PARTS = 20;
 
-// Retry each failed part up to 4 times
-const PART_MAX_RETRIES = 4;
+// Upload parts in batches
+const CONCURRENT_PARTS =
+    10;
+
 
 // =====================================================
 // SAFE FILE NAME
 // =====================================================
 
-function createSafeFileName(originalName) {
-    return path
-        .basename(originalName)
-        .replace(
+function safeFileName(
+    originalName
+) {
+
+    let name =
+        path.basename(
+            originalName ||
+            "download"
+        );
+
+    name =
+        name.replace(
             /[<>:"/\\|?*\x00-\x1F]/g,
             "_"
         );
-}
 
-// =====================================================
-// WAIT FUNCTION
-// =====================================================
+    name =
+        name.trim();
 
-function wait(ms) {
-    return new Promise(resolve => {
-        setTimeout(resolve, ms);
-    });
-}
-
-// =====================================================
-// READ ONLY ONE PART FROM FILE
-// =====================================================
-
-async function readFilePart(
-    filePath,
-    start,
-    length
-) {
-    const fileHandle =
-        await fs.promises.open(
-            filePath,
-            "r"
-        );
-
-    try {
-        const buffer =
-            Buffer.allocUnsafe(length);
-
-        let totalRead = 0;
-
-        while (
-            totalRead < length
-        ) {
-            const result =
-                await fileHandle.read(
-                    buffer,
-                    totalRead,
-                    length - totalRead,
-                    start + totalRead
-                );
-
-            if (result.bytesRead === 0) {
-                break;
-            }
-
-            totalRead +=
-                result.bytesRead;
-        }
-
-        if (
-            totalRead !== length
-        ) {
-            throw new Error(
-                `Could only read ${totalRead} of ${length} bytes.`
-            );
-        }
-
-        return buffer;
-
-    } finally {
-        await fileHandle.close();
+    if (!name) {
+        name =
+            "download";
     }
+
+    return name;
 }
 
+
 // =====================================================
-// UPLOAD ONE PART WITH RETRIES
+// ERROR MESSAGE HELPER
+// =====================================================
+
+function getErrorDetails(
+    error
+) {
+
+    if (!error) {
+        return "Unknown error.";
+    }
+
+    return {
+
+        name:
+            error.name ||
+            "UnknownError",
+
+        message:
+            error.message ||
+            String(error),
+
+        code:
+            error.Code ||
+            error.code ||
+            "N/A",
+
+        status:
+            error.$metadata?.httpStatusCode ||
+            error.statusCode ||
+            "N/A",
+
+        requestId:
+            error.$metadata?.requestId ||
+            "N/A"
+    };
+}
+
+
+// =====================================================
+// UPLOAD ONE PART
 // =====================================================
 
 async function uploadSinglePart(
@@ -264,140 +419,95 @@ async function uploadSinglePart(
     uploadId,
     partNumber
 ) {
+
     const start =
-        (partNumber - 1) *
+        (
+            partNumber -
+            1
+        ) *
         PART_SIZE;
 
     const end =
         Math.min(
-            start + PART_SIZE,
+            start +
+            PART_SIZE,
             fileSize
         );
 
     const contentLength =
-        end - start;
+        end -
+        start;
 
-    console.log(
-        `Starting part ${partNumber}...`
-    );
-
-    // -------------------------------------------------
-    // READ ONLY THIS PART
-    // -------------------------------------------------
-
-    const partData =
-        await readFilePart(
+    const stream =
+        fs.createReadStream(
             filePath,
-            start,
-            contentLength
+            {
+
+                start:
+                    start,
+
+                end:
+                    end -
+                    1
+            }
         );
 
-    // -------------------------------------------------
-    // RETRY LOOP
-    // -------------------------------------------------
+    try {
 
-    for (
-        let attempt = 1;
-        attempt <= PART_MAX_RETRIES;
-        attempt++
-    ) {
-        try {
-            const result =
-                await s3.send(
-                    new UploadPartCommand({
-                        Bucket:
-                            BUCKET_NAME,
+        const result =
+            await s3.send(
+                new UploadPartCommand({
 
-                        Key:
-                            key,
+                    Bucket:
+                        BUCKET_NAME,
 
-                        UploadId:
-                            uploadId,
+                    Key:
+                        key,
 
-                        PartNumber:
-                            partNumber,
+                    UploadId:
+                        uploadId,
 
-                        Body:
-                            partData,
+                    PartNumber:
+                        partNumber,
 
-                        ContentLength:
-                            contentLength
-                    })
-                );
+                    Body:
+                        stream,
 
-            if (!result.ETag) {
-                throw new Error(
-                    `Part ${partNumber} did not return an ETag.`
-                );
-            }
-
-            console.log(
-                `Part ${partNumber} uploaded successfully.`
+                    ContentLength:
+                        contentLength
+                })
             );
 
-            return {
-                ETag:
-                    result.ETag,
+        if (
+            !result.ETag
+        ) {
 
-                PartNumber:
-                    partNumber
-            };
-
-        } catch (error) {
-
-            console.error(
-                `Part ${partNumber} failed ` +
-                `(attempt ${attempt}/${PART_MAX_RETRIES}):`,
-                error.message
-            );
-
-            // No more retries
-            if (
-                attempt ===
-                PART_MAX_RETRIES
-            ) {
-                throw new Error(
-                    `Part ${partNumber} failed after ${PART_MAX_RETRIES} attempts: ${error.message}`
-                );
-            }
-
-            // Exponential backoff
-            const baseDelay =
-                Math.min(
-                    2000 *
-                    Math.pow(
-                        2,
-                        attempt - 1
-                    ),
-                    15000
-                );
-
-            // Small random delay prevents
-            // all 20 parts retrying together
-            const randomDelay =
-                Math.floor(
-                    Math.random() * 1000
-                );
-
-            const retryDelay =
-                baseDelay +
-                randomDelay;
-
-            console.log(
-                `Retrying part ${partNumber} in ` +
-                `${(retryDelay / 1000).toFixed(1)} seconds...`
-            );
-
-            await wait(
-                retryDelay
+            throw new Error(
+                `Part ${partNumber} did not return an ETag.`
             );
         }
-    }
 
-    throw new Error(
-        `Part ${partNumber} upload failed.`
-    );
+        console.log(
+            `Part ${partNumber} uploaded successfully.`
+        );
+
+        return {
+
+            PartNumber:
+                partNumber,
+
+            ETag:
+                result.ETag
+        };
+
+    } catch (error) {
+
+        stream.destroy();
+
+        throw error;
+    }
 }
+
 
 // =====================================================
 // MULTIPART UPLOAD
@@ -409,7 +519,9 @@ async function uploadLargeFile(
     contentType,
     metadata
 ) {
-    let uploadId = null;
+
+    let uploadId =
+        null;
 
     try {
 
@@ -418,7 +530,7 @@ async function uploadLargeFile(
             "========================================"
         );
         console.log(
-            "STARTING BACKBLAZE MULTIPART UPLOAD"
+            "STARTING MULTIPART UPLOAD"
         );
         console.log(
             "========================================"
@@ -431,6 +543,7 @@ async function uploadLargeFile(
         const createResult =
             await s3.send(
                 new CreateMultipartUploadCommand({
+
                     Bucket:
                         BUCKET_NAME,
 
@@ -448,16 +561,14 @@ async function uploadLargeFile(
         uploadId =
             createResult.UploadId;
 
-        if (!uploadId) {
+        if (
+            !uploadId
+        ) {
+
             throw new Error(
-                "Backblaze did not return UploadId."
+                "Backblaze did not return an UploadId."
             );
         }
-
-        console.log(
-            "Multipart Upload ID:",
-            uploadId
-        );
 
         // -------------------------------------------------
         // FILE SIZE
@@ -471,6 +582,16 @@ async function uploadLargeFile(
         const fileSize =
             stats.size;
 
+        if (
+            fileSize ===
+            0
+        ) {
+
+            throw new Error(
+                "Empty files are not supported."
+            );
+        }
+
         const totalParts =
             Math.ceil(
                 fileSize /
@@ -479,14 +600,7 @@ async function uploadLargeFile(
 
         console.log(
             "File size:",
-            fileSize,
-            "bytes"
-        );
-
-        console.log(
-            "Part size:",
-            PART_SIZE,
-            "bytes"
+            fileSize
         );
 
         console.log(
@@ -494,23 +608,21 @@ async function uploadLargeFile(
             totalParts
         );
 
-        console.log(
-            "Concurrent uploads:",
-            CONCURRENT_PARTS
-        );
-
-        console.log("");
-
         // -------------------------------------------------
-        // UPLOAD PARTS IN GROUPS OF 20
+        // UPLOAD PARTS
         // -------------------------------------------------
 
-        const completedParts = [];
+        const completedParts =
+            [];
 
         for (
             let batchStart = 1;
-            batchStart <= totalParts;
-            batchStart += CONCURRENT_PARTS
+
+            batchStart <=
+            totalParts;
+
+            batchStart +=
+            CONCURRENT_PARTS
         ) {
 
             const batchEnd =
@@ -518,66 +630,51 @@ async function uploadLargeFile(
                     batchStart +
                     CONCURRENT_PARTS -
                     1,
+
                     totalParts
                 );
 
             console.log(
-                `Uploading parts ${batchStart}-${batchEnd}/${totalParts}...`
+                `Uploading parts ${batchStart}-${batchEnd}/${totalParts}`
             );
 
-            const batchPromises = [];
-
-            // -------------------------------------------------
-            // START 20 PARTS
-            // -------------------------------------------------
+            const promises =
+                [];
 
             for (
                 let partNumber =
                     batchStart;
 
-                partNumber <= batchEnd;
+                partNumber <=
+                batchEnd;
 
                 partNumber++
             ) {
 
-                batchPromises.push(
+                promises.push(
                     uploadSinglePart(
+
                         filePath,
+
                         fileSize,
+
                         key,
+
                         uploadId,
+
                         partNumber
                     )
                 );
             }
 
-            // -------------------------------------------------
-            // WAIT FOR ALL 20
-            // -------------------------------------------------
-
-            const batchResults =
+            const results =
                 await Promise.all(
-                    batchPromises
+                    promises
                 );
 
-            for (
-                const result
-                of batchResults
-            ) {
-                completedParts.push(
-                    result
-                );
-            }
-
-            console.log(
-                `Parts ${batchStart}-${batchEnd} completed.`
+            completedParts.push(
+                ...results
             );
-
-            console.log(
-                `Overall progress: ${completedParts.length}/${totalParts} parts`
-            );
-
-            console.log("");
         }
 
         // -------------------------------------------------
@@ -591,30 +688,12 @@ async function uploadLargeFile(
         );
 
         // -------------------------------------------------
-        // VERIFY ALL PARTS
-        // -------------------------------------------------
-
-        if (
-            completedParts.length !==
-            totalParts
-        ) {
-            throw new Error(
-                `Multipart upload incomplete. ` +
-                `Expected ${totalParts} parts, ` +
-                `got ${completedParts.length}.`
-            );
-        }
-
-        // -------------------------------------------------
         // COMPLETE MULTIPART UPLOAD
         // -------------------------------------------------
 
-        console.log(
-            "Completing multipart upload..."
-        );
-
         await s3.send(
             new CompleteMultipartUploadCommand({
+
                 Bucket:
                     BUCKET_NAME,
 
@@ -625,58 +704,28 @@ async function uploadLargeFile(
                     uploadId,
 
                 MultipartUpload: {
+
                     Parts:
                         completedParts
                 }
             })
         );
 
-        console.log("");
         console.log(
-            "========================================"
+            "Multipart upload completed successfully."
         );
-        console.log(
-            "MULTIPART UPLOAD COMPLETED SUCCESSFULLY"
-        );
-        console.log(
-            "========================================"
-        );
-        console.log("");
-
-        return true;
 
     } catch (error) {
 
-        console.error("");
-        console.error(
-            "========================================"
-        );
-        console.error(
-            "MULTIPART UPLOAD FAILED"
-        );
-        console.error(
-            "========================================"
-        );
-
-        console.error(
-            "Error:",
-            error.message
-        );
-
-        // -------------------------------------------------
-        // ABORT INCOMPLETE MULTIPART UPLOAD
-        // -------------------------------------------------
-
-        if (uploadId) {
+        if (
+            uploadId
+        ) {
 
             try {
 
-                console.log(
-                    "Aborting incomplete multipart upload..."
-                );
-
                 await s3.send(
                     new AbortMultipartUploadCommand({
+
                         Bucket:
                             BUCKET_NAME,
 
@@ -689,14 +738,16 @@ async function uploadLargeFile(
                 );
 
                 console.log(
-                    "Incomplete multipart upload aborted."
+                    "Failed multipart upload aborted."
                 );
 
             } catch (abortError) {
 
                 console.error(
-                    "Abort failed:",
-                    abortError.message
+                    "Abort error:",
+                    getErrorDetails(
+                        abortError
+                    )
                 );
             }
         }
@@ -705,8 +756,124 @@ async function uploadLargeFile(
     }
 }
 
+
+// =====================================================
+// FILE KEY FORMAT
+// =====================================================
+//
+// New files use:
+//
+// FS1-<deleteTimestamp>-<mode>-<random>-<filename>
+//
+// Example:
+//
+// FS1-1786818000000-timed-a8f93d12-file.pdf
+//
+// This allows cleanup without HeadObject.
+// =====================================================
+
+function createFileKey(
+    deleteAt,
+    mode,
+    fileName
+) {
+
+    const random =
+        crypto
+            .randomBytes(10)
+            .toString("hex");
+
+    return (
+        `FS1-${deleteAt}-${mode}-${random}-${fileName}`
+    );
+}
+
+
+// =====================================================
+// PARSE NEW FILE KEY
+// =====================================================
+
+function parseFileKey(
+    key
+) {
+
+    const match =
+        /^FS1-(\d+)-(timed|after-download)-([a-f0-9]+)-(.+)$/i.exec(
+            key
+        );
+
+    if (
+        !match
+    ) {
+
+        return null;
+    }
+
+    return {
+
+        deleteAt:
+            Number(
+                match[1]
+            ),
+
+        mode:
+            match[2].toLowerCase(),
+
+        random:
+            match[3],
+
+        fileName:
+            match[4]
+    };
+}
+
+
+// =====================================================
+// GET FILE NAME FROM KEY
+// =====================================================
+
+function getFileNameFromKey(
+    key
+) {
+
+    const parsed =
+        parseFileKey(
+            key
+        );
+
+    if (
+        parsed
+    ) {
+
+        return safeFileName(
+            parsed.fileName
+        );
+    }
+
+    // Compatibility with old files
+    const oldName =
+        path.basename(
+            key
+        );
+
+    return safeFileName(
+        oldName.replace(
+            /^\d+-/,
+            ""
+        )
+    );
+}
+
+
 // =====================================================
 // AUTO DELETE CLEANUP
+// =====================================================
+//
+// IMPORTANT:
+// No HeadObject is used here.
+//
+// New files contain their expiry timestamp
+// directly inside their key.
 // =====================================================
 
 async function cleanupExpiredFiles() {
@@ -716,11 +883,18 @@ async function cleanupExpiredFiles() {
         let continuationToken =
             undefined;
 
+        let checked =
+            0;
+
+        let deleted =
+            0;
+
         do {
 
             const result =
                 await s3.send(
                     new ListObjectsV2Command({
+
                         Bucket:
                             BUCKET_NAME,
 
@@ -730,80 +904,82 @@ async function cleanupExpiredFiles() {
                 );
 
             const objects =
-                result.Contents || [];
+                result.Contents ||
+                [];
 
             for (
                 const object
                 of objects
             ) {
 
-                if (!object.Key) {
+                if (
+                    !object.Key
+                ) {
+
+                    continue;
+                }
+
+                checked++;
+
+                const parsed =
+                    parseFileKey(
+                        object.Key
+                    );
+
+                // Old files are left alone.
+                // New files have expiration in key.
+                if (
+                    !parsed
+                ) {
+
+                    continue;
+                }
+
+                if (
+                    !Number.isFinite(
+                        parsed.deleteAt
+                    )
+                ) {
+
+                    continue;
+                }
+
+                if (
+                    Date.now() <
+                    parsed.deleteAt
+                ) {
+
                     continue;
                 }
 
                 try {
 
-                    const head =
-                        await s3.send(
-                            new HeadObjectCommand({
-                                Bucket:
-                                    BUCKET_NAME,
+                    console.log(
+                        "Auto deleting expired file:",
+                        object.Key
+                    );
 
-                                Key:
-                                    object.Key
-                            })
-                        );
+                    await s3.send(
+                        new DeleteObjectCommand({
 
-                    const metadata =
-                        head.Metadata || {};
+                            Bucket:
+                                BUCKET_NAME,
 
-                    const deleteAt =
-                        metadata.deleteat;
+                            Key:
+                                object.Key
+                        })
+                    );
 
-                    if (!deleteAt) {
-                        continue;
-                    }
+                    deleted++;
 
-                    const deleteTime =
-                        Number(
-                            deleteAt
-                        );
-
-                    if (
-                        Number.isFinite(
-                            deleteTime
-                        ) &&
-                        Date.now() >=
-                            deleteTime
-                    ) {
-
-                        console.log(
-                            "Auto deleting:",
-                            object.Key
-                        );
-
-                        await s3.send(
-                            new DeleteObjectCommand({
-                                Bucket:
-                                    BUCKET_NAME,
-
-                                Key:
-                                    object.Key
-                            })
-                        );
-
-                        console.log(
-                            "Auto delete successful:",
-                            object.Key
-                        );
-                    }
-
-                } catch (error) {
+                } catch (deleteError) {
 
                     console.error(
-                        "Checking file failed:",
+                        "Delete failed:",
                         object.Key,
-                        error.message
+                        getErrorDetails(
+                            deleteError
+                        )
                     );
                 }
             }
@@ -817,72 +993,95 @@ async function cleanupExpiredFiles() {
             continuationToken
         );
 
+        if (
+            checked >
+            0
+        ) {
+
+            console.log(
+                `Cleanup checked ${checked} objects; deleted ${deleted}.`
+            );
+        }
+
     } catch (error) {
 
         console.error(
-            "Auto delete cleanup error:",
-            error.message
+            "Cleanup failed:",
+            getErrorDetails(
+                error
+            )
         );
     }
 }
 
-// =====================================================
-// RUN AUTO DELETE CLEANUP
-// =====================================================
 
+// Run cleanup every minute.
 setInterval(
     cleanupExpiredFiles,
-    60 * 1000
+    60 *
+    1000
 );
 
+
+// Initial cleanup after startup.
 setTimeout(
     cleanupExpiredFiles,
     5000
 );
 
+
 // =====================================================
-// UPLOAD
+// UPLOAD ROUTE
 // =====================================================
 
 app.post(
     "/upload",
-    upload.single("file"),
-    async (req, res) => {
 
-        console.log("");
-        console.log(
-            "========================================"
-        );
-        console.log(
-            "UPLOAD REQUEST RECEIVED"
-        );
-        console.log(
-            "========================================"
-        );
+    upload.single("file"),
+
+    async (req, res) => {
 
         let temporaryFilePath =
             null;
 
         try {
 
+            console.log("");
+            console.log(
+                "========================================"
+            );
+            console.log(
+                "UPLOAD REQUEST"
+            );
+            console.log(
+                "========================================"
+            );
+
             // -------------------------------------------------
             // CHECK FILE
             // -------------------------------------------------
 
-            if (!req.file) {
+            if (
+                !req.file
+            ) {
 
-                return res.status(400).json({
-                    success: false,
-                    error:
-                        "No file received."
-                });
+                return res
+                    .status(400)
+                    .json({
+
+                        success:
+                            false,
+
+                        error:
+                            "No file received."
+                    });
             }
 
             temporaryFilePath =
                 req.file.path;
 
             // -------------------------------------------------
-            // AUTO DELETE OPTION
+            // DELETE OPTION
             // -------------------------------------------------
 
             const deleteAfter =
@@ -895,53 +1094,50 @@ app.post(
                 deleteAfter ===
                 "download";
 
-            const isTimedDelete =
-                Object.prototype
-                    .hasOwnProperty.call(
-                        DELETE_TIMES,
-                        deleteAfter
-                    );
+            const isTimed =
+                Object.prototype.hasOwnProperty.call(
+                    DELETE_TIMES,
+                    deleteAfter
+                );
 
             if (
                 !isAfterDownload &&
-                !isTimedDelete
+                !isTimed
             ) {
 
-                return res.status(400).json({
-                    success: false,
-                    error:
-                        "Invalid Auto Delete option."
-                });
+                return res
+                    .status(400)
+                    .json({
+
+                        success:
+                            false,
+
+                        error:
+                            "Invalid Auto Delete option."
+                    });
             }
 
             // -------------------------------------------------
             // FILE NAME
             // -------------------------------------------------
 
-            const cleanFileName =
-                createSafeFileName(
+            const fileName =
+                safeFileName(
                     req.file.originalname
                 );
 
-            const key =
-                `${Date.now()}-${cleanFileName}`;
-
             // -------------------------------------------------
-            // AUTO DELETE METADATA
+            // EXPIRATION
             // -------------------------------------------------
-
-            const metadata = {};
 
             let deleteAt;
+            let mode;
 
-            if (isAfterDownload) {
+            if (
+                isAfterDownload
+            ) {
 
-                // Delete immediately after a
-                // successful download.
-                //
-                // If nobody downloads it,
-                // cleanup will delete it after 30 minutes.
-
+                // Maximum 30 minutes.
                 deleteAt =
                     Date.now() +
                     (
@@ -950,13 +1146,8 @@ app.post(
                         1000
                     );
 
-                metadata.deletemode =
+                mode =
                     "after-download";
-
-                metadata.deleteat =
-                    String(
-                        deleteAt
-                    );
 
             } else {
 
@@ -969,66 +1160,76 @@ app.post(
                         1000
                     );
 
-                metadata.deletemode =
+                mode =
                     "timed";
-
-                metadata.deleteat =
-                    String(
-                        deleteAt
-                    );
             }
 
             // -------------------------------------------------
-            // LOG
+            // KEY
             // -------------------------------------------------
 
+            const key =
+                createFileKey(
+                    deleteAt,
+                    mode,
+                    fileName
+                );
+
+            // -------------------------------------------------
+            // METADATA
+            // -------------------------------------------------
+
+            const metadata = {
+
+                deleteat:
+                    String(
+                        deleteAt
+                    ),
+
+                deletemode:
+                    mode
+            };
+
             console.log(
-                "File:",
-                cleanFileName
+                "Original filename:",
+                fileName
             );
 
             console.log(
                 "Size:",
-                req.file.size,
-                "bytes"
+                req.file.size
             );
 
             console.log(
-                "Type:",
-                req.file.mimetype
+                "Delete mode:",
+                mode
             );
 
             console.log(
-                "Temporary file:",
-                temporaryFilePath
+                "Delete at:",
+                new Date(
+                    deleteAt
+                ).toISOString()
             );
 
-            if (isAfterDownload) {
-
-                console.log(
-                    "Auto Delete:",
-                    "After Download (Max 30 Minutes)"
-                );
-
-            } else {
-
-                console.log(
-                    "Auto Delete:",
-                    new Date(
-                        deleteAt
-                    ).toLocaleString()
-                );
-            }
+            console.log(
+                "B2 object key:",
+                key
+            );
 
             // -------------------------------------------------
-            // MULTIPART UPLOAD
+            // UPLOAD TO BACKBLAZE
             // -------------------------------------------------
 
             await uploadLargeFile(
+
                 temporaryFilePath,
+
                 key,
+
                 req.file.mimetype ||
                     "application/octet-stream",
+
                 metadata
             );
 
@@ -1041,17 +1242,6 @@ app.post(
                     key
                 )}`;
 
-            console.log("");
-            console.log(
-                "========================================"
-            );
-            console.log(
-                "UPLOAD SUCCESSFUL"
-            );
-            console.log(
-                "========================================"
-            );
-
             console.log(
                 "Download URL:",
                 downloadUrl
@@ -1061,32 +1251,33 @@ app.post(
             // RESPONSE
             // -------------------------------------------------
 
-            return res.status(200).json({
+            return res
+                .status(200)
+                .json({
 
-                success: true,
+                    success:
+                        true,
 
-                message:
-                    "File uploaded successfully.",
+                    message:
+                        "File uploaded successfully.",
 
-                fileName:
-                    cleanFileName,
+                    fileName:
+                        fileName,
 
-                key:
-                    key,
+                    key:
+                        key,
 
-                downloadUrl:
-                    downloadUrl,
+                    downloadUrl:
+                        downloadUrl,
 
-                deleteMode:
-                    isAfterDownload
-                        ? "after-download"
-                        : "timed",
+                    deleteMode:
+                        mode,
 
-                deleteAt:
-                    new Date(
-                        deleteAt
-                    ).toISOString()
-            });
+                    deleteAt:
+                        new Date(
+                            deleteAt
+                        ).toISOString()
+                });
 
         } catch (error) {
 
@@ -1102,39 +1293,32 @@ app.post(
             );
 
             console.error(
-                "Error:",
-                error.message
+                getErrorDetails(
+                    error
+                )
             );
 
-            console.error(
-                "Code:",
-                error.Code ||
-                error.code ||
-                "N/A"
-            );
+            if (
+                !res.headersSent
+            ) {
 
-            console.error(
-                "HTTP status:",
-                error.$metadata?.httpStatusCode ||
-                "N/A"
-            );
+                return res
+                    .status(500)
+                    .json({
 
-            return res.status(500).json({
+                        success:
+                            false,
 
-                success: false,
+                        error:
+                            "Upload failed.",
 
-                error:
-                    "Upload failed.",
-
-                details:
-                    error.message
-            });
+                        details:
+                            error.message ||
+                            "Unknown error."
+                    });
+            }
 
         } finally {
-
-            // -------------------------------------------------
-            // DELETE TEMPORARY LOCAL FILE
-            // -------------------------------------------------
 
             if (
                 temporaryFilePath
@@ -1146,15 +1330,11 @@ app.post(
                         temporaryFilePath
                     );
 
-                    console.log(
-                        "Temporary file removed."
-                    );
-
-                } catch (cleanupError) {
+                } catch (error) {
 
                     console.error(
-                        "Temporary file cleanup failed:",
-                        cleanupError.message
+                        "Temporary file cleanup:",
+                        error.message
                     );
                 }
             }
@@ -1162,209 +1342,641 @@ app.post(
     }
 );
 
+
 // =====================================================
-// DOWNLOAD
+// DOWNLOAD ROUTE
+// =====================================================
+//
+// IMPORTANT:
+//
+// This route DOES NOT use HeadObject.
+//
+// It calls GetObject directly.
+//
+// This is the main fix for the UnknownError
+// shown in your Render logs.
 // =====================================================
 
 app.get(
     "/download/:key",
     async (req, res) => {
 
+        const key =
+            req.params.key;
+
+        if (
+            !key
+        ) {
+
+            return res
+                .status(400)
+                .send(
+                    "Invalid download link."
+                );
+        }
+
+        console.log("");
+        console.log(
+            "========================================"
+        );
+        console.log(
+            "DOWNLOAD REQUEST"
+        );
+        console.log(
+            "========================================"
+        );
+
+        console.log(
+            "Key:",
+            key
+        );
+
         try {
 
-            const key =
-                req.params.key;
+            // -------------------------------------------------
+            // RANGE
+            // -------------------------------------------------
 
-            if (!key) {
+            const range =
+                req.headers.range;
 
-                return res.status(400).send(
-                    "Invalid download request."
-                );
+            let requestedRange =
+                undefined;
+
+            if (
+                range
+            ) {
+
+                const validRange =
+                    /^bytes=(\d*)-(\d*)$/i.test(
+                        range
+                    );
+
+                if (
+                    !validRange
+                ) {
+
+                    res.setHeader(
+                        "Content-Range",
+                        "bytes */*"
+                    );
+
+                    return res
+                        .status(416)
+                        .send(
+                            "Invalid byte range."
+                        );
+                }
+
+                requestedRange =
+                    range;
+            }
+
+            // -------------------------------------------------
+            // GET OBJECT DIRECTLY
+            // -------------------------------------------------
+
+            const commandInput = {
+
+                Bucket:
+                    BUCKET_NAME,
+
+                Key:
+                    key
+            };
+
+            if (
+                requestedRange
+            ) {
+
+                commandInput.Range =
+                    requestedRange;
             }
 
             console.log(
-                "Download request:",
-                key
+                "Requesting object from Backblaze..."
             );
 
-            // -------------------------------------------------
-            // CHECK FILE
-            // -------------------------------------------------
-
-            const headResult =
+            const object =
                 await s3.send(
-                    new HeadObjectCommand({
-                        Bucket:
-                            BUCKET_NAME,
-
-                        Key:
-                            key
-                    })
+                    new GetObjectCommand(
+                        commandInput
+                    )
                 );
+
+            // -------------------------------------------------
+            // CHECK BODY
+            // -------------------------------------------------
+
+            if (
+                !object.Body
+            ) {
+
+                console.error(
+                    "Backblaze returned an empty Body."
+                );
+
+                return res
+                    .status(500)
+                    .send(
+                        "Download failed: empty file stream."
+                    );
+            }
+
+            // -------------------------------------------------
+            // FILE INFORMATION
+            // -------------------------------------------------
+
+            const fileName =
+                getFileNameFromKey(
+                    key
+                );
+
+            const contentType =
+                object.ContentType ||
+                "application/octet-stream";
+
+            const contentLength =
+                Number(
+                    object.ContentLength
+                );
+
+            const contentRange =
+                object.ContentRange;
+
+            const acceptRanges =
+                object.AcceptRanges ||
+                "bytes";
 
             const metadata =
-                headResult.Metadata ||
+                object.Metadata ||
                 {};
 
-            const isAfterDownload =
-                metadata.deletemode ===
-                "after-download";
-
             // -------------------------------------------------
-            // GET FILE
+            // EXPIRATION CHECK
             // -------------------------------------------------
 
-            const result =
-                await s3.send(
-                    new GetObjectCommand({
-                        Bucket:
-                            BUCKET_NAME,
+            let deleteAt =
+                null;
 
-                        Key:
-                            key
-                    })
+            const parsedKey =
+                parseFileKey(
+                    key
                 );
+
+            if (
+                parsedKey
+            ) {
+
+                deleteAt =
+                    parsedKey.deleteAt;
+
+            } else if (
+                metadata.deleteat
+            ) {
+
+                deleteAt =
+                    Number(
+                        metadata.deleteat
+                    );
+            }
+
+            if (
+                Number.isFinite(
+                    deleteAt
+                ) &&
+                Date.now() >=
+                deleteAt
+            ) {
+
+                console.log(
+                    "File has expired:",
+                    key
+                );
+
+                try {
+
+                    await s3.send(
+                        new DeleteObjectCommand({
+
+                            Bucket:
+                                BUCKET_NAME,
+
+                            Key:
+                                key
+                        })
+                    );
+
+                } catch (deleteError) {
+
+                    console.error(
+                        "Expired file deletion failed:",
+                        getErrorDetails(
+                            deleteError
+                        )
+                    );
+                }
+
+                return res
+                    .status(410)
+                    .send(
+                        "This file has expired."
+                    );
+            }
+
+            // -------------------------------------------------
+            // DOWNLOAD MODE
+            // -------------------------------------------------
+
+            const downloadMode =
+                parsedKey?.mode ||
+                metadata.deletemode ||
+                "timed";
+
+            const isAfterDownload =
+                downloadMode ===
+                "after-download";
 
             // -------------------------------------------------
             // RESPONSE HEADERS
             // -------------------------------------------------
 
-            if (result.ContentType) {
+            res.setHeader(
+                "Content-Type",
+                contentType
+            );
+
+            res.setHeader(
+                "Content-Disposition",
+                `attachment; filename="${fileName.replace(/["\r\n]/g, "_")}"; filename*=UTF-8''${encodeURIComponent(fileName)}`
+            );
+
+            res.setHeader(
+                "Accept-Ranges",
+                acceptRanges
+            );
+
+            res.setHeader(
+                "Cache-Control",
+                "no-store, no-cache, must-revalidate, private"
+            );
+
+            res.setHeader(
+                "Pragma",
+                "no-cache"
+            );
+
+            res.setHeader(
+                "Expires",
+                "0"
+            );
+
+            res.setHeader(
+                "X-Content-Type-Options",
+                "nosniff"
+            );
+
+            if (
+                object.ETag
+            ) {
 
                 res.setHeader(
-                    "Content-Type",
-                    result.ContentType
+                    "ETag",
+                    object.ETag
                 );
             }
 
             if (
-                result.ContentLength !==
-                undefined
+                object.LastModified
             ) {
 
                 res.setHeader(
-                    "Content-Length",
-                    result.ContentLength
+                    "Last-Modified",
+                    object.LastModified.toUTCString()
                 );
             }
 
-            const originalName =
-                path
-                    .basename(key)
-                    .replace(
-                        /^\d+-/,
-                        ""
+            // -------------------------------------------------
+            // RANGE RESPONSE
+            // -------------------------------------------------
+
+            if (
+                requestedRange
+            ) {
+
+                if (
+                    contentRange
+                ) {
+
+                    res.status(
+                        206
                     );
 
-            res.setHeader(
-                "Content-Disposition",
-                `attachment; filename="${originalName}"`
+                    res.setHeader(
+                        "Content-Range",
+                        contentRange
+                    );
+
+                } else {
+
+                    // Some S3-compatible responses may not
+                    // expose ContentRange. Still return 206
+                    // when Range was requested.
+
+                    res.status(
+                        206
+                    );
+                }
+
+                if (
+                    Number.isFinite(
+                        contentLength
+                    )
+                ) {
+
+                    res.setHeader(
+                        "Content-Length",
+                        String(
+                            contentLength
+                        )
+                    );
+                }
+
+            } else {
+
+                res.status(
+                    200
+                );
+
+                if (
+                    Number.isFinite(
+                        contentLength
+                    )
+                ) {
+
+                    res.setHeader(
+                        "Content-Length",
+                        String(
+                            contentLength
+                        )
+                    );
+                }
+            }
+
+            console.log(
+                "Content-Type:",
+                contentType
             );
+
+            console.log(
+                "Content-Length:",
+                contentLength
+            );
+
+            console.log(
+                "Content-Range:",
+                contentRange ||
+                "none"
+            );
+
+            console.log(
+                "Range requested:",
+                requestedRange ||
+                "none"
+            );
+
+            console.log(
+                "Download mode:",
+                downloadMode
+            );
+
+            // -------------------------------------------------
+            // STREAM
+            // -------------------------------------------------
+
+            let streamCompleted =
+                false;
+
+            const body =
+                object.Body;
+
+            try {
+
+                await pipeline(
+                    body,
+                    res
+                );
+
+                streamCompleted =
+                    true;
+
+                console.log(
+                    "Download stream completed:",
+                    key
+                );
+
+            } catch (streamError) {
+
+                console.error(
+                    "Download stream error:",
+                    getErrorDetails(
+                        streamError
+                    )
+                );
+
+                if (
+                    !res.destroyed
+                ) {
+
+                    res.destroy();
+                }
+
+                return;
+            }
 
             // -------------------------------------------------
             // AFTER DOWNLOAD DELETE
             // -------------------------------------------------
-
-            if (isAfterDownload) {
-
-                res.on(
-                    "finish",
-                    async () => {
-
-                        try {
-
-                            console.log(
-                                "Download completed."
-                            );
-
-                            console.log(
-                                "Deleting file:",
-                                key
-                            );
-
-                            await s3.send(
-                                new DeleteObjectCommand({
-                                    Bucket:
-                                        BUCKET_NAME,
-
-                                    Key:
-                                        key
-                                })
-                            );
-
-                            console.log(
-                                "File deleted after download."
-                            );
-
-                        } catch (error) {
-
-                            console.error(
-                                "After-download delete failed:",
-                                error.message
-                            );
-                        }
-                    }
-                );
-            }
-
-            // -------------------------------------------------
-            // STREAM FILE
+            //
+            // Only delete after a complete non-range
+            // download. This prevents a Range request from
+            // deleting the file before the browser has all
+            // pieces.
             // -------------------------------------------------
 
             if (
-                result.Body &&
-                typeof result.Body.pipe ===
-                    "function"
+                streamCompleted &&
+                isAfterDownload &&
+                !requestedRange
             ) {
 
-                result.Body.pipe(res);
+                try {
 
-            } else {
+                    await s3.send(
+                        new DeleteObjectCommand({
 
-                const data =
-                    await result.Body
-                        .transformToByteArray();
+                            Bucket:
+                                BUCKET_NAME,
 
-                res.end(
-                    Buffer.from(data)
-                );
+                            Key:
+                                key
+                        })
+                    );
+
+                    console.log(
+                        "File deleted after successful download:",
+                        key
+                    );
+
+                } catch (deleteError) {
+
+                    console.error(
+                        "After-download deletion failed:",
+                        getErrorDetails(
+                            deleteError
+                        )
+                    );
+                }
             }
 
         } catch (error) {
 
+            console.error("");
             console.error(
-                "DOWNLOAD ERROR:",
-                error.message
+                "========================================"
+            );
+            console.error(
+                "DOWNLOAD ERROR"
+            );
+            console.error(
+                "========================================"
             );
 
-            if (!res.headersSent) {
+            console.error(
+                getErrorDetails(
+                    error
+                )
+            );
+
+            // -------------------------------------------------
+            // NOT FOUND
+            // -------------------------------------------------
+
+            const status =
+                error?.$metadata?.httpStatusCode ||
+                error?.statusCode;
+
+            if (
+                status ===
+                404 ||
+                error?.name ===
+                "NoSuchKey"
+            ) {
 
                 if (
-                    error.name ===
-                        "NoSuchKey" ||
-                    error.$metadata?.httpStatusCode ===
-                        404
+                    !res.headersSent
                 ) {
 
-                    return res.status(404).send(
-                        "File not found. It may have already been automatically deleted."
-                    );
+                    return res
+                        .status(404)
+                        .send(
+                            "File not found or it has expired."
+                        );
                 }
 
-                return res.status(500).send(
-                    "Download failed."
-                );
+                return;
+            }
+
+            // -------------------------------------------------
+            // ACCESS DENIED
+            // -------------------------------------------------
+
+            if (
+                status ===
+                403 ||
+                error?.name ===
+                "AccessDenied"
+            ) {
+
+                if (
+                    !res.headersSent
+                ) {
+
+                    return res
+                        .status(403)
+                        .send(
+                            "Download access denied."
+                        );
+                }
+
+                return;
+            }
+
+            // -------------------------------------------------
+            // RANGE ERROR
+            // -------------------------------------------------
+
+            if (
+                status ===
+                416
+            ) {
+
+                if (
+                    !res.headersSent
+                ) {
+
+                    res.setHeader(
+                        "Content-Range",
+                        "bytes */*"
+                    );
+
+                    return res
+                        .status(416)
+                        .send(
+                            "Requested range is not satisfiable."
+                        );
+                }
+
+                return;
+            }
+
+            // -------------------------------------------------
+            // GENERAL DOWNLOAD ERROR
+            // -------------------------------------------------
+
+            if (
+                !res.headersSent
+            ) {
+
+                return res
+                    .status(500)
+                    .send(
+                        "Download failed."
+                    );
+            }
+
+            if (
+                !res.destroyed
+            ) {
+
+                res.destroy();
             }
         }
     }
 );
+
 
 // =====================================================
 // MULTER ERROR HANDLER
 // =====================================================
 
 app.use(
-    (error, req, res, next) => {
+    (
+        error,
+        req,
+        res,
+        next
+    ) => {
 
         if (
             error instanceof
@@ -1376,43 +1988,90 @@ app.use(
                 error.message
             );
 
-            return res.status(400).json({
-                success: false,
-                error:
-                    "Upload error",
-                details:
-                    error.message
-            });
+            if (
+                error.code ===
+                "LIMIT_FILE_SIZE"
+            ) {
+
+                return res
+                    .status(413)
+                    .json({
+
+                        success:
+                            false,
+
+                        error:
+                            "File is too large. Maximum size is 10 GB."
+                    });
+            }
+
+            return res
+                .status(400)
+                .json({
+
+                    success:
+                        false,
+
+                    error:
+                        "Upload error.",
+
+                    details:
+                        error.message
+                });
         }
 
-        next(error);
+        next(
+            error
+        );
     }
 );
+
 
 // =====================================================
 // GENERAL ERROR HANDLER
 // =====================================================
 
 app.use(
-    (error, req, res, next) => {
+    (
+        error,
+        req,
+        res,
+        next
+    ) => {
 
         console.error(
             "SERVER ERROR:",
-            error
+            getErrorDetails(
+                error
+            )
         );
 
-        if (!res.headersSent) {
+        if (
+            !res.headersSent
+        ) {
 
-            res.status(500).json({
-                success: false,
-                error:
-                    "Server error",
-                details:
-                    error.message
-            });
+            return res
+                .status(500)
+                .json({
+
+                    success:
+                        false,
+
+                    error:
+                        "Server error.",
+
+                    details:
+                        error.message ||
+                        "Unknown error."
+                });
         }
+
+        next(
+            error
+        );
     }
 );
+
 
 // =====================================================
 // START SERVER
@@ -1420,85 +2079,77 @@ app.use(
 
 app.listen(
     PORT,
+    "0.0.0.0",
     () => {
 
         console.log("");
         console.log(
             "========================================"
         );
-
         console.log(
             "FILESHARE SERVER RUNNING"
         );
-
         console.log(
             "========================================"
         );
 
         console.log(
-            `http://localhost:${PORT}`
-        );
-
-        console.log("");
-
-        console.log(
-            "Large-file upload: MULTIPART"
+            "Port:",
+            PORT
         );
 
         console.log(
-            "Part size: 10 MB"
+            "Backblaze endpoint:",
+            ENDPOINT
         );
 
         console.log(
-            "Concurrent parts: 20"
+            "Bucket:",
+            BUCKET_NAME
         );
 
         console.log(
-            "Failed part retries: 4"
+            "Multipart upload:",
+            "ENABLED"
         );
 
         console.log(
-            "Auto Delete: ENABLED"
-        );
-
-        console.log("");
-
-        console.log(
-            "Options:"
+            "Part size:",
+            "10 MB"
         );
 
         console.log(
-            "10 Minutes"
+            "Concurrent parts:",
+            CONCURRENT_PARTS
         );
 
         console.log(
-            "30 Minutes"
+            "Direct GetObject downloads:",
+            "ENABLED"
         );
 
         console.log(
-            "1 Hour"
+            "HTTP Range downloads:",
+            "ENABLED"
         );
 
         console.log(
-            "After Download (Max 30 Minutes)"
-        );
-
-        console.log("");
-
-        console.log(
-            "Key ID loaded:",
-            !!KEY_ID
+            "Mobile downloads:",
+            "ENABLED"
         );
 
         console.log(
-            "Application key loaded:",
-            !!APPLICATION_KEY
+            "Auto Delete:",
+            "ENABLED"
+        );
+
+        console.log(
+            "QR Code:",
+            "ENABLED"
         );
 
         console.log(
             "========================================"
         );
-
-        console.log("");
     }
 );
