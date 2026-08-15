@@ -78,3 +78,9 @@ button:hover {
 #status {
     margin-top: 15px;
 }
+.creator-credit {
+    text-align: center;
+    margin-top: 30px;
+    font-size: 14px;
+    font-weight: bold;
+}
