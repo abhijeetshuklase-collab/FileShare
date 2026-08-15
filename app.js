@@ -4,10 +4,22 @@ const progressBar = document.getElementById("progressBar");
 const progressText = document.getElementById("progressText");
 const status = document.getElementById("status");
 
-const downloadResult = document.getElementById("downloadResult");
-const downloadBtn = document.getElementById("downloadBtn");
-const copyBtn = document.getElementById("copyBtn");
-const copyStatus = document.getElementById("copyStatus");
+const deleteAfter = document.getElementById("deleteAfter");
+
+const downloadResult =
+    document.getElementById("downloadResult");
+
+const downloadBtn =
+    document.getElementById("downloadBtn");
+
+const copyBtn =
+    document.getElementById("copyBtn");
+
+const copyStatus =
+    document.getElementById("copyStatus");
+
+const expiryText =
+    document.getElementById("expiryText");
 
 
 uploadBtn.addEventListener("click", () => {
@@ -19,7 +31,6 @@ uploadBtn.addEventListener("click", () => {
         return;
     }
 
-    // Reset UI
     uploadBtn.disabled = true;
 
     progressBar.style.width = "0%";
@@ -29,11 +40,16 @@ uploadBtn.addEventListener("click", () => {
     downloadResult.style.display = "none";
     copyStatus.textContent = "";
 
-    // Create FormData
     const formData = new FormData();
+
     formData.append("file", file);
 
-    // Create request
+    // Send Auto Delete selection
+    formData.append(
+        "deleteAfter",
+        deleteAfter.value
+    );
+
     const xhr = new XMLHttpRequest();
 
     xhr.open("POST", "/upload", true);
@@ -51,9 +67,14 @@ uploadBtn.addEventListener("click", () => {
                 (event.loaded / event.total) * 100
             );
 
-            progressBar.style.width = percent + "%";
-            progressText.textContent = percent + "%";
-            status.textContent = "Uploading...";
+            progressBar.style.width =
+                percent + "%";
+
+            progressText.textContent =
+                percent + "%";
+
+            status.textContent =
+                "Uploading...";
         }
     };
 
@@ -66,7 +87,10 @@ uploadBtn.addEventListener("click", () => {
 
         uploadBtn.disabled = false;
 
-        if (xhr.status >= 200 && xhr.status < 300) {
+        if (
+            xhr.status >= 200 &&
+            xhr.status < 300
+        ) {
 
             progressBar.style.width = "100%";
             progressText.textContent = "100%";
@@ -74,49 +98,37 @@ uploadBtn.addEventListener("click", () => {
 
             try {
 
-                const response = JSON.parse(xhr.responseText);
+                const response =
+                    JSON.parse(xhr.responseText);
 
-                console.log("Upload response:", response);
+                console.log(
+                    "Upload response:",
+                    response
+                );
 
-
-                // =================================================
-                // CHECK DOWNLOAD URL
-                // =================================================
 
                 if (!response.downloadUrl) {
 
-                    console.error(
-                        "Server did not return downloadUrl:",
-                        response
-                    );
-
                     status.textContent =
                         "Upload complete, but download link was not returned.";
+
+                    console.error(
+                        "No download URL:",
+                        response
+                    );
 
                     return;
                 }
 
 
-                // =================================================
-                // SET DOWNLOAD LINK
-                // =================================================
+                let downloadUrl =
+                    response.downloadUrl;
 
-                let downloadUrl = response.downloadUrl;
 
-                /*
-                 * If the server returns a relative URL such as:
-                 *
-                 * /download/abc
-                 *
-                 * convert it into:
-                 *
-                 * http://localhost:3000/download/abc
-                 *
-                 * If it is already a full URL, leave it unchanged.
-                 */
-
-                if (!downloadUrl.startsWith("http://") &&
-                    !downloadUrl.startsWith("https://")) {
+                if (
+                    !downloadUrl.startsWith("http://") &&
+                    !downloadUrl.startsWith("https://")
+                ) {
 
                     downloadUrl =
                         window.location.origin +
@@ -128,23 +140,47 @@ uploadBtn.addEventListener("click", () => {
                 // SHOW DOWNLOAD AREA
                 // =================================================
 
-                downloadResult.style.display = "block";
+                downloadResult.style.display =
+                    "block";
+
+                downloadBtn.href =
+                    downloadUrl;
 
 
                 // =================================================
-                // DOWNLOAD BUTTON
+                // AUTO DELETE MESSAGE
                 // =================================================
 
-                downloadBtn.href = downloadUrl;
+                if (
+                    response.deleteMode ===
+                    "after-download"
+                ) {
+
+                    expiryText.textContent =
+                        "🗑️ File will be deleted after the first download.";
+
+                } else if (response.deleteAt) {
+
+                    const deleteDate =
+                        new Date(
+                            response.deleteAt
+                        );
+
+                    expiryText.textContent =
+                        "🗑️ File will be automatically deleted on " +
+                        deleteDate.toLocaleString();
+                }
 
 
                 // =================================================
-                // COPY LINK BUTTON
+                // COPY LINK
                 // =================================================
 
-                copyBtn.textContent = "Copy Link";
+                copyBtn.textContent =
+                    "Copy Link";
 
-                copyStatus.textContent = "";
+                copyStatus.textContent =
+                    "";
 
 
                 copyBtn.onclick = async () => {
@@ -155,16 +191,19 @@ uploadBtn.addEventListener("click", () => {
                             downloadUrl
                         );
 
-                        copyBtn.textContent = "Link Copied!";
+                        copyBtn.textContent =
+                            "Link Copied!";
 
                         copyStatus.textContent =
                             "Download link copied successfully.";
 
                         setTimeout(() => {
 
-                            copyBtn.textContent = "Copy Link";
+                            copyBtn.textContent =
+                                "Copy Link";
 
-                            copyStatus.textContent = "";
+                            copyStatus.textContent =
+                                "";
 
                         }, 2000);
 
@@ -175,11 +214,14 @@ uploadBtn.addEventListener("click", () => {
                             error
                         );
 
-                        // Fallback
-                        const temporaryInput =
-                            document.createElement("input");
 
-                        temporaryInput.value = downloadUrl;
+                        const temporaryInput =
+                            document.createElement(
+                                "input"
+                            );
+
+                        temporaryInput.value =
+                            downloadUrl;
 
                         document.body.appendChild(
                             temporaryInput
@@ -187,29 +229,30 @@ uploadBtn.addEventListener("click", () => {
 
                         temporaryInput.select();
 
-                        document.execCommand("copy");
+                        document.execCommand(
+                            "copy"
+                        );
 
                         temporaryInput.remove();
 
-                        copyBtn.textContent = "Link Copied!";
+                        copyBtn.textContent =
+                            "Link Copied!";
 
                         copyStatus.textContent =
                             "Download link copied successfully.";
 
                         setTimeout(() => {
 
-                            copyBtn.textContent = "Copy Link";
+                            copyBtn.textContent =
+                                "Copy Link";
 
-                            copyStatus.textContent = "";
+                            copyStatus.textContent =
+                                "";
 
                         }, 2000);
                     }
                 };
 
-
-                // =================================================
-                // SUCCESS
-                // =================================================
 
                 console.log(
                     "Download link:",
@@ -229,7 +272,8 @@ uploadBtn.addEventListener("click", () => {
 
         } else {
 
-            status.textContent = "Upload failed.";
+            status.textContent =
+                "Upload failed.";
 
             console.error(
                 "Server response:",
@@ -261,8 +305,9 @@ uploadBtn.addEventListener("click", () => {
 
 
     // =====================================================
-    // SEND FILE
+    // SEND
     // =====================================================
 
     xhr.send(formData);
+
 });

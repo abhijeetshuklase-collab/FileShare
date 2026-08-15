@@ -2,73 +2,518 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
+
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
     <title>FileShare</title>
 
-    <link rel="stylesheet" href="style.css">
+    <!-- Browser Tab Logo -->
+    <link rel="icon" type="image/png" href="logo.png">
+
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            min-height: 100vh;
+
+            font-family: Arial, Helvetica, sans-serif;
+
+            background: #f4f7fb;
+
+            color: #111;
+
+            display: flex;
+            justify-content: center;
+            align-items: center;
+
+            padding: 30px 15px;
+        }
+
+        .main-container {
+            width: 100%;
+            max-width: 800px;
+
+            text-align: center;
+        }
+
+        /* LOGO */
+        .logo {
+            width: min(520px, 90%);
+            max-height: 190px;
+
+            object-fit: contain;
+
+            display: block;
+            margin: 0 auto 15px;
+        }
+
+        .subtitle {
+            font-size: 20px;
+            color: #555;
+
+            margin-bottom: 45px;
+        }
+
+        /* UPLOAD BOX */
+        .upload-box {
+            background: white;
+
+            width: 100%;
+
+            padding: 45px 45px 40px;
+
+            border-radius: 22px;
+
+            box-shadow:
+                0 10px 35px rgba(0, 0, 0, 0.08);
+        }
+
+        /* FILE INPUT */
+        #fileInput {
+            width: 100%;
+
+            font-size: 16px;
+
+            margin-bottom: 28px;
+        }
+
+        /* DELETE LABEL */
+        .delete-label {
+            display: block;
+
+            text-align: left;
+
+            font-size: 20px;
+
+            font-weight: bold;
+
+            margin-bottom: 12px;
+        }
+
+        /* DELETE SELECT */
+        #deleteAfter {
+            width: 100%;
+
+            padding: 16px;
+
+            font-size: 18px;
+
+            border: 1px solid #ddd;
+
+            border-radius: 12px;
+
+            background: white;
+
+            cursor: pointer;
+
+            margin-bottom: 30px;
+        }
+
+        /* UPLOAD BUTTON */
+        #uploadBtn {
+            border: none;
+
+            padding: 15px 35px;
+
+            font-size: 18px;
+
+            font-weight: bold;
+
+            color: white;
+
+            background: #111;
+
+            border-radius: 12px;
+
+            cursor: pointer;
+
+            transition: 0.2s;
+        }
+
+        #uploadBtn:hover {
+            transform: translateY(-2px);
+
+            background: #222;
+        }
+
+        #uploadBtn:disabled {
+            background: #999;
+
+            cursor: not-allowed;
+
+            transform: none;
+        }
+
+        /* PROGRESS */
+        .progress-container {
+            width: 100%;
+
+            height: 14px;
+
+            background: #ddd;
+
+            border-radius: 20px;
+
+            margin-top: 35px;
+
+            overflow: hidden;
+        }
+
+        #progressBar {
+            width: 0%;
+
+            height: 100%;
+
+            background: #111;
+
+            border-radius: 20px;
+
+            transition: width 0.2s;
+        }
+
+        #progressText {
+            font-size: 20px;
+
+            font-weight: bold;
+
+            margin: 15px 0 5px;
+        }
+
+        #status {
+            font-size: 18px;
+
+            margin-top: 10px;
+
+            word-break: break-word;
+        }
+
+        /* DOWNLOAD LINK */
+        .download-btn {
+            display: inline-block;
+
+            margin-top: 25px;
+
+            padding: 12px 28px;
+
+            background: #000;
+
+            color: #fff;
+
+            text-decoration: none;
+
+            font-size: 17px;
+
+            font-weight: bold;
+
+            border-radius: 10px;
+
+            transition: all 0.2s;
+        }
+
+        .download-btn:hover {
+            background: #333;
+
+            transform: translateY(-2px);
+        }
+
+        /* CREATOR CREDIT */
+        .creator {
+            margin-top: 35px;
+
+            font-size: 17px;
+
+            font-weight: bold;
+
+            letter-spacing: 0.3px;
+        }
+
+        /* MOBILE */
+        @media (max-width: 600px) {
+
+            body {
+                padding: 20px 12px;
+            }
+
+            .logo {
+                width: 95%;
+                max-height: 150px;
+            }
+
+            .subtitle {
+                font-size: 17px;
+
+                margin-bottom: 30px;
+            }
+
+            .upload-box {
+                padding: 30px 20px;
+            }
+
+            .delete-label {
+                font-size: 18px;
+            }
+
+            #deleteAfter {
+                font-size: 16px;
+            }
+
+            #uploadBtn {
+                width: 100%;
+            }
+
+            .creator {
+                font-size: 14px;
+            }
+        }
+    </style>
 </head>
 
 <body>
 
-    <div class="container">
+<div class="main-container">
 
-        <h1>FileShare</h1>
+    <!-- WEBSITE LOGO -->
+    <img
+        src="logo.png"
+        alt="FileShare Logo"
+        class="logo"
+    >
 
-        <p class="subtitle">
-            Upload and share your files securely
-        </p>
+    <div class="subtitle">
+        Upload and share your files securely
+    </div>
 
-        <div class="upload-box">
+    <!-- UPLOAD SECTION -->
+    <div class="upload-box">
 
-            <input type="file" id="fileInput">
-
-            <button id="uploadBtn">
-                Upload File
-            </button>
-
-            <div class="progress-container">
-                <div id="progressBar"></div>
-            </div>
-
-            <p id="progressText">0%</p>
-
-            <p id="status"></p>
-<!-- DOWNLOAD RESULT -->
-<div id="downloadResult" class="download-result" style="display: none;">
-
-    <p class="success-message">✅ File uploaded successfully!</p>
-
-    <div class="download-actions">
-
-        <a
-            id="downloadBtn"
-            class="download-btn"
-            href="#"
-            target="_blank"
-            rel="noopener noreferrer"
+        <input
+            type="file"
+            id="fileInput"
         >
-            Download File
-        </a>
 
-        <button
-            id="copyBtn"
-            class="copy-btn"
-            type="button"
+        <label
+            for="deleteAfter"
+            class="delete-label"
         >
-            Copy Link
+            Auto Delete
+        </label>
+
+        <select id="deleteAfter">
+
+            <option value="600">
+                After 10 Minutes
+            </option>
+
+            <option value="1800">
+                After 30 Minutes
+            </option>
+
+            <option value="3600">
+                After 1 Hour
+            </option>
+
+            <option value="download">
+                After Download (Max 30 Minutes)
+            </option>
+
+        </select>
+
+        <button id="uploadBtn">
+            Upload File
         </button>
 
-    </div>
-
-    <p id="copyStatus"></p>
-
-</div>
+        <div class="progress-container">
+            <div id="progressBar"></div>
         </div>
 
+        <p id="progressText">
+            0%
+        </p>
+
+        <p id="status"></p>
+
     </div>
 
-    <script src="app.js"></script>
-<p class="creator-credit">THIS TOOL WAS CREATED AND UPDATED BY ABHIJEET</p>
+    <!-- CREATOR CREDIT -->
+    <div class="creator">
+        THIS TOOL WAS CREATED AND UPDATED BY ABHIJEET
+    </div>
+
+</div>
+
+
+<script>
+
+const fileInput = document.getElementById("fileInput");
+
+const deleteAfter = document.getElementById("deleteAfter");
+
+const uploadBtn = document.getElementById("uploadBtn");
+
+const progressBar = document.getElementById("progressBar");
+
+const progressText = document.getElementById("progressText");
+
+const statusText = document.getElementById("status");
+
+
+uploadBtn.addEventListener("click", async () => {
+
+    const file = fileInput.files[0];
+
+    if (!file) {
+
+        alert("Please select a file first.");
+
+        return;
+    }
+
+
+    uploadBtn.disabled = true;
+
+    progressBar.style.width = "0%";
+
+    progressText.textContent = "0%";
+
+    statusText.textContent = "Uploading...";
+
+
+    const formData = new FormData();
+
+    formData.append("file", file);
+
+    formData.append(
+        "deleteAfter",
+        deleteAfter.value
+    );
+
+
+    const xhr = new XMLHttpRequest();
+
+
+    xhr.open(
+        "POST",
+        "/upload",
+        true
+    );
+
+
+    /* UPLOAD PROGRESS */
+
+    xhr.upload.addEventListener(
+        "progress",
+        function(event) {
+
+            if (event.lengthComputable) {
+
+                const percent =
+                    Math.round(
+                        (event.loaded / event.total) * 100
+                    );
+
+                progressBar.style.width =
+                    percent + "%";
+
+                progressText.textContent =
+                    percent + "%";
+            }
+
+        }
+    );
+
+
+    /* SUCCESS */
+
+    xhr.onload = function() {
+
+        if (
+            xhr.status >= 200 &&
+            xhr.status < 300
+        ) {
+
+            try {
+
+                const result =
+                    JSON.parse(xhr.responseText);
+
+
+                progressBar.style.width = "100%";
+
+                progressText.textContent = "100%";
+
+                statusText.innerHTML =
+                    "Upload complete!";
+
+
+                if (result.url) {
+
+                    const link =
+                        document.createElement("a");
+
+                    link.href = result.url;
+
+                    link.target = "_blank";
+
+                    link.className =
+                        "download-btn";
+
+                    link.textContent =
+                        "Open Download Link";
+
+
+                    statusText.appendChild(
+                        document.createElement("br")
+                    );
+
+                    statusText.appendChild(link);
+                }
+
+            } catch (error) {
+
+                statusText.textContent =
+                    "Upload completed, but the server returned an invalid response.";
+            }
+
+        } else {
+
+            statusText.textContent =
+                "Upload failed. Check the server console.";
+
+            alert(
+                "Upload failed. Check the server console."
+            );
+        }
+
+
+        uploadBtn.disabled = false;
+    };
+
+
+    /* ERROR */
+
+    xhr.onerror = function() {
+
+        statusText.textContent =
+            "Upload failed. Check the server console.";
+
+        alert(
+            "Upload failed. Check the server console."
+        );
+
+        uploadBtn.disabled = false;
+    };
+
+
+    /* SEND */
+
+    xhr.send(formData);
+
+});
+
+</script>
+
 </body>
 </html>
