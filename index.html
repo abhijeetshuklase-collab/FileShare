@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>FileShare</title>
+
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+
+    <div class="container">
+
+        <h1>FileShare</h1>
+
+        <p class="subtitle">
+            Upload and share your files securely
+        </p>
+
+        <div class="upload-box">
+
+            <input type="file" id="fileInput">
+
+            <button id="uploadBtn">
+                Upload File
+            </button>
+
+            <div class="progress-container">
+                <div id="progressBar"></div>
+            </div>
+
+            <p id="progressText">0%</p>
+
+            <p id="status"></p>
+<!-- DOWNLOAD RESULT -->
+<div id="downloadResult" class="download-result" style="display: none;">
+
+    <p class="success-message">✅ File uploaded successfully!</p>
+
+    <div class="download-actions">
+
+        <a
+            id="downloadBtn"
+            class="download-btn"
+            href="#"
+            target="_blank"
+            rel="noopener noreferrer"
+        >
+            Download File
+        </a>
+
+        <button
+            id="copyBtn"
+            class="copy-btn"
+            type="button"
+        >
+            Copy Link
+        </button>
+
+    </div>
+
+    <p id="copyStatus"></p>
+
+</div>
+        </div>
+
+    </div>
+
+    <script src="app.js"></script>
+
+</body>
+</html>
