@@ -1,561 +1,1688 @@
 "use strict";
 
-document.addEventListener("DOMContentLoaded", () => {
+const express = require("express");
+const multer = require("multer");
+const dotenv = require("dotenv");
+const path = require("path");
+const fs = require("fs");
+const os = require("os");
+const { pipeline } = require("stream");
 
-    console.log("FileShare app.js loaded successfully.");
+const {
+    S3Client,
+    CreateMultipartUploadCommand,
+    UploadPartCommand,
+    CompleteMultipartUploadCommand,
+    AbortMultipartUploadCommand,
+    GetObjectCommand,
+    DeleteObjectCommand,
+    ListObjectsV2Command,
+    HeadObjectCommand
+} = require("@aws-sdk/client-s3");
 
-    // =====================================================
-    // GET ELEMENTS
-    // =====================================================
+dotenv.config();
 
-    const fileInput = document.getElementById("fileInput");
-    const deleteAfter = document.getElementById("deleteAfter");
-    const uploadBtn = document.getElementById("uploadBtn");
+const app = express();
 
-    const progressBar = document.getElementById("progressBar");
-    const progressText = document.getElementById("progressText");
-    const status = document.getElementById("status");
-
-    const downloadResult = document.getElementById("downloadResult");
-    const downloadBtn = document.getElementById("downloadBtn");
-    const copyBtn = document.getElementById("copyBtn");
-    const copyStatus = document.getElementById("copyStatus");
-    const downloadLinkText = document.getElementById("downloadLinkText");
-    const fileReady = document.getElementById("fileReady");
-    const expiryText = document.getElementById("expiryText");
-
-
-    // =====================================================
-    // CHECK ONLY ESSENTIAL UPLOAD ELEMENTS
-    // =====================================================
-
-    if (!fileInput) {
-        console.error("FileShare error: #fileInput not found.");
-        return;
-    }
-
-    if (!uploadBtn) {
-        console.error("FileShare error: #uploadBtn not found.");
-        return;
-    }
-
-    if (!deleteAfter) {
-        console.error("FileShare error: #deleteAfter not found.");
-        return;
-    }
-
-    console.log("All upload elements found.");
+const PORT = process.env.PORT || 3000;
 
 
-    // =====================================================
-    // CURRENT DOWNLOAD URL
-    // =====================================================
+// =====================================================
+// BACKBLAZE B2 CONFIGURATION
+// =====================================================
 
-    let currentDownloadUrl = "";
+const REGION =
+    process.env.B2_REGION;
+
+const ENDPOINT =
+    process.env.B2_ENDPOINT;
+
+const KEY_ID =
+    process.env.B2_KEY_ID;
+
+const APPLICATION_KEY =
+    process.env.B2_APPLICATION_KEY;
+
+const BUCKET_NAME =
+    process.env.B2_BUCKET_NAME;
 
 
-    // =====================================================
-    // RESET DOWNLOAD AREA
-    // =====================================================
+// =====================================================
+// CHECK BACKBLAZE CONFIGURATION
+// =====================================================
 
-    function resetDownloadArea() {
+if (
+    !REGION ||
+    !ENDPOINT ||
+    !KEY_ID ||
+    !APPLICATION_KEY ||
+    !BUCKET_NAME
+) {
+    console.error("");
+    console.error("========================================");
+    console.error("MISSING BACKBLAZE CONFIGURATION");
+    console.error("========================================");
+    console.error("");
+    console.error("Required environment variables:");
+    console.error("B2_REGION");
+    console.error("B2_ENDPOINT");
+    console.error("B2_KEY_ID");
+    console.error("B2_APPLICATION_KEY");
+    console.error("B2_BUCKET_NAME");
+    console.error("");
 
-        currentDownloadUrl = "";
+    process.exit(1);
+}
 
-        if (downloadResult) {
-            downloadResult.style.display = "none";
+
+// =====================================================
+// BACKBLAZE S3 CLIENT
+// =====================================================
+
+const s3 =
+    new S3Client({
+
+        region:
+            REGION,
+
+        endpoint:
+            ENDPOINT,
+
+        credentials: {
+
+            accessKeyId:
+                KEY_ID,
+
+            secretAccessKey:
+                APPLICATION_KEY
+
+        },
+
+        forcePathStyle:
+            true,
+
+        maxAttempts:
+            5,
+
+        requestChecksumCalculation:
+            "WHEN_REQUIRED",
+
+        responseChecksumValidation:
+            "WHEN_REQUIRED"
+    });
+
+
+// =====================================================
+// PROJECT PATHS
+// =====================================================
+//
+// FileShare/
+// ├── index.html
+// ├── app.js
+// ├── style.css
+// ├── GooglePay_QR.png
+// └── server/
+//     └── app.js
+//
+// =====================================================
+
+const projectDirectory =
+    path.resolve(
+        __dirname,
+        ".."
+    );
+
+
+// =====================================================
+// TEMPORARY UPLOAD DIRECTORY
+// =====================================================
+
+const temporaryDirectory =
+    path.join(
+        os.tmpdir(),
+        "fileshare-uploads"
+    );
+
+if (
+    !fs.existsSync(
+        temporaryDirectory
+    )
+) {
+
+    fs.mkdirSync(
+        temporaryDirectory,
+        {
+            recursive: true
         }
-
-        if (downloadBtn) {
-            downloadBtn.href = "#";
-        }
-
-        if (downloadLinkText) {
-            downloadLinkText.value = "";
-        }
-
-        if (fileReady) {
-            fileReady.textContent = "";
-        }
-
-        if (expiryText) {
-            expiryText.textContent = "";
-        }
-
-        if (copyStatus) {
-            copyStatus.textContent = "";
-        }
-
-        if (copyBtn) {
-            copyBtn.textContent = "Copy Link";
-        }
-    }
+    );
+}
 
 
-    // =====================================================
-    // RESET PROGRESS
-    // =====================================================
+// =====================================================
+// MULTER DISK STORAGE
+// =====================================================
 
-    function resetProgress() {
+const storage =
+    multer.diskStorage({
 
-        if (progressBar) {
-            progressBar.style.width = "0%";
-        }
+        destination:
+            (req, file, callback) => {
 
-        if (progressText) {
-            progressText.textContent = "0%";
-        }
-    }
+                callback(
+                    null,
+                    temporaryDirectory
+                );
+            },
+
+        filename:
+            (req, file, callback) => {
+
+                const uniqueName =
+                    `${Date.now()}-${Math.random()
+                        .toString(36)
+                        .substring(2, 14)}`;
+
+                callback(
+                    null,
+                    uniqueName
+                );
+            }
+    });
 
 
-    // =====================================================
-    // SET STATUS
-    // =====================================================
+const upload =
+    multer({
 
-    function setStatus(message) {
+        storage:
 
-        if (status) {
-            status.textContent = message;
-        }
+            storage
 
-        console.log(message);
-    }
+    });
 
 
-    // =====================================================
-    // CREATE FULL DOWNLOAD URL
-    // =====================================================
+// =====================================================
+// FRONTEND STATIC FILES
+// =====================================================
 
-    function createFullDownloadUrl(downloadUrl) {
+app.use(
+    express.static(
+        projectDirectory
+    )
+);
+
+
+// =====================================================
+// EXPLICIT QR CODE ROUTE
+// =====================================================
+
+app.get(
+    "/GooglePay_QR.png",
+    (req, res) => {
+
+        const qrPath =
+            path.join(
+                projectDirectory,
+                "GooglePay_QR.png"
+            );
+
+        console.log(
+            "QR request:",
+            qrPath
+        );
 
         if (
-            typeof downloadUrl !== "string" ||
-            downloadUrl.trim() === ""
+            !fs.existsSync(
+                qrPath
+            )
         ) {
-            return "";
-        }
-
-        const url = downloadUrl.trim();
-
-        if (
-            url.startsWith("http://") ||
-            url.startsWith("https://")
-        ) {
-            return url;
-        }
-
-        if (url.startsWith("/")) {
-            return window.location.origin + url;
-        }
-
-        return window.location.origin + "/" + url;
-    }
-
-
-    // =====================================================
-    // SHOW DOWNLOAD RESULT
-    // =====================================================
-
-    function showDownloadLink(response) {
-
-        if (!response || !response.downloadUrl) {
 
             console.error(
-                "No downloadUrl received:",
-                response
+                "QR file not found:",
+                qrPath
             );
 
-            setStatus(
-                "Upload completed, but no download link was received."
+            return res
+                .status(404)
+                .send(
+                    "GooglePay_QR.png not found."
+                );
+        }
+
+        res.sendFile(
+            qrPath
+        );
+    }
+);
+
+
+// =====================================================
+// HOME PAGE
+// =====================================================
+
+app.get(
+    "/",
+    (req, res) => {
+
+        const indexPath =
+            path.join(
+                projectDirectory,
+                "index.html"
             );
 
-            return;
+        if (
+            !fs.existsSync(
+                indexPath
+            )
+        ) {
+
+            return res
+                .status(500)
+                .send(
+                    "index.html not found."
+                );
         }
 
-        const fullUrl =
-            createFullDownloadUrl(
-                response.downloadUrl
-            );
-
-        if (!fullUrl) {
-
-            setStatus(
-                "Upload completed, but the download link is invalid."
-            );
-
-            return;
-        }
-
-        currentDownloadUrl = fullUrl;
+        res.sendFile(
+            indexPath
+        );
+    }
+);
 
 
-        // -------------------------------------------------
-        // SHOW DOWNLOAD AREA
-        // -------------------------------------------------
+// =====================================================
+// HEALTH CHECK
+// =====================================================
 
-        if (downloadResult) {
-            downloadResult.style.display = "block";
-        }
+app.get(
+    "/health",
+    (req, res) => {
 
+        res.json({
 
-        // -------------------------------------------------
-        // DOWNLOAD BUTTON
-        // -------------------------------------------------
+            status:
+                "OK",
 
-        if (downloadBtn) {
-            downloadBtn.href = currentDownloadUrl;
-        }
+            server:
+                "FileShare",
 
+            backblaze:
+                "configured"
 
-        // -------------------------------------------------
-        // LINK TEXT
-        // -------------------------------------------------
-
-        if (downloadLinkText) {
-            downloadLinkText.value = currentDownloadUrl;
-        }
+        });
+    }
+);
 
 
-        // -------------------------------------------------
-        // FILE NAME
-        // -------------------------------------------------
+// =====================================================
+// AUTO DELETE SETTINGS
+// =====================================================
 
-        if (fileReady) {
+const DELETE_TIMES = {
 
-            if (response.fileName) {
+    "600":
+        10 * 60,
 
-                fileReady.textContent =
-                    "Your file is ready: " +
-                    response.fileName;
+    "1800":
+        30 * 60,
 
-            } else {
+    "3600":
+        60 * 60
 
-                fileReady.textContent =
-                    "Your file is ready.";
+};
+
+
+// =====================================================
+// MULTIPART SETTINGS
+// =====================================================
+
+// 10 MB per part
+const PART_SIZE =
+    10 *
+    1024 *
+    1024;
+
+
+// 20 parts simultaneously
+const CONCURRENT_PARTS =
+    20;
+
+
+// =====================================================
+// SAFE FILE NAME
+// =====================================================
+
+function createSafeFileName(
+    originalName
+) {
+
+    return path
+        .basename(
+            originalName
+        )
+        .replace(
+            /[<>:"/\\|?*\x00-\x1F]/g,
+            "_"
+        );
+}
+
+
+// =====================================================
+// UPLOAD ONE PART
+// =====================================================
+
+async function uploadSinglePart(
+    filePath,
+    fileSize,
+    key,
+    uploadId,
+    partNumber
+) {
+
+    const start =
+        (
+            partNumber -
+            1
+        ) *
+        PART_SIZE;
+
+    const end =
+        Math.min(
+            start +
+            PART_SIZE,
+            fileSize
+        );
+
+    const contentLength =
+        end -
+        start;
+
+    console.log(
+        `Starting part ${partNumber}`
+    );
+
+    const fileStream =
+        fs.createReadStream(
+            filePath,
+            {
+                start:
+                    start,
+
+                end:
+                    end - 1
             }
+        );
+
+    try {
+
+        const result =
+            await s3.send(
+                new UploadPartCommand({
+
+                    Bucket:
+                        BUCKET_NAME,
+
+                    Key:
+                        key,
+
+                    UploadId:
+                        uploadId,
+
+                    PartNumber:
+                        partNumber,
+
+                    Body:
+                        fileStream,
+
+                    ContentLength:
+                        contentLength
+
+                })
+            );
+
+        if (
+            !result.ETag
+        ) {
+
+            throw new Error(
+                `Part ${partNumber} did not return an ETag.`
+            );
+        }
+
+        console.log(
+            `Part ${partNumber} uploaded successfully.`
+        );
+
+        return {
+
+            PartNumber:
+                partNumber,
+
+            ETag:
+                result.ETag
+
+        };
+
+    } catch (error) {
+
+        fileStream.destroy();
+
+        throw error;
+    }
+}
+
+
+// =====================================================
+// LARGE FILE MULTIPART UPLOAD
+// =====================================================
+
+async function uploadLargeFile(
+    filePath,
+    key,
+    contentType,
+    metadata
+) {
+
+    let uploadId =
+        null;
+
+    try {
+
+        console.log("");
+        console.log(
+            "========================================"
+        );
+        console.log(
+            "STARTING MULTIPART UPLOAD"
+        );
+        console.log(
+            "========================================"
+        );
+
+
+        // -------------------------------------------------
+        // CREATE MULTIPART UPLOAD
+        // -------------------------------------------------
+
+        const createResult =
+            await s3.send(
+                new CreateMultipartUploadCommand({
+
+                    Bucket:
+                        BUCKET_NAME,
+
+                    Key:
+                        key,
+
+                    ContentType:
+                        contentType,
+
+                    Metadata:
+                        metadata
+
+                })
+            );
+
+
+        uploadId =
+            createResult.UploadId;
+
+
+        if (
+            !uploadId
+        ) {
+
+            throw new Error(
+                "Backblaze did not return an UploadId."
+            );
         }
 
 
         // -------------------------------------------------
-        // EXPIRY
+        // FILE SIZE
         // -------------------------------------------------
 
-        if (expiryText) {
+        const stats =
+            await fs.promises.stat(
+                filePath
+            );
 
-            if (
-                response.deleteMode ===
-                "after-download"
-            ) {
+        const fileSize =
+            stats.size;
 
-                expiryText.textContent =
-                    "Auto Delete: After Download.";
 
-            } else if (response.deleteAt) {
-
-                const expiryDate =
-                    new Date(response.deleteAt);
-
-                if (
-                    !Number.isNaN(
-                        expiryDate.getTime()
-                    )
-                ) {
-
-                    expiryText.textContent =
-                        "File expires at: " +
-                        expiryDate.toLocaleString();
-
-                } else {
-
-                    expiryText.textContent =
-                        "The file will be automatically deleted.";
-                }
-
-            } else {
-
-                expiryText.textContent =
-                    "The file will be automatically deleted.";
-            }
-        }
+        const totalParts =
+            Math.ceil(
+                fileSize /
+                PART_SIZE
+            );
 
 
         console.log(
-            "Download link:",
-            currentDownloadUrl
+            "File size:",
+            fileSize,
+            "bytes"
         );
-    }
+
+        console.log(
+            "Part size:",
+            PART_SIZE,
+            "bytes"
+        );
+
+        console.log(
+            "Total parts:",
+            totalParts
+        );
+
+        console.log(
+            "Concurrent parts:",
+            CONCURRENT_PARTS
+        );
 
 
-    // =====================================================
-    // COPY DOWNLOAD LINK
-    // =====================================================
+        // -------------------------------------------------
+        // UPLOAD IN BATCHES OF 20
+        // -------------------------------------------------
 
-    async function copyDownloadLink() {
+        const completedParts =
+            [];
 
-        if (!currentDownloadUrl) {
 
-            if (copyStatus) {
-                copyStatus.textContent =
-                    "No download link available.";
-            }
+        for (
+            let batchStart = 1;
 
-            return;
-        }
+            batchStart <= totalParts;
 
-        try {
+            batchStart +=
+                CONCURRENT_PARTS
+        ) {
 
-            await navigator.clipboard.writeText(
-                currentDownloadUrl
+            const batchEnd =
+                Math.min(
+                    batchStart +
+                    CONCURRENT_PARTS -
+                    1,
+
+                    totalParts
+                );
+
+
+            console.log(
+                `Uploading parts ${batchStart}-${batchEnd} of ${totalParts}`
             );
 
-            if (copyBtn) {
-                copyBtn.textContent =
-                    "Link Copied!";
-            }
 
-            if (copyStatus) {
-                copyStatus.textContent =
-                    "Download link copied successfully.";
-            }
+            const promises =
+                [];
 
-        } catch (error) {
 
-            console.warn(
-                "Clipboard API failed:",
-                error
-            );
+            for (
+                let partNumber =
+                    batchStart;
 
-            const tempInput =
-                document.createElement("input");
+                partNumber <=
+                    batchEnd;
 
-            tempInput.value =
-                currentDownloadUrl;
+                partNumber++
+            ) {
 
-            tempInput.style.position =
-                "fixed";
+                promises.push(
 
-            tempInput.style.left =
-                "-9999px";
+                    uploadSinglePart(
 
-            document.body.appendChild(
-                tempInput
-            );
+                        filePath,
 
-            tempInput.select();
+                        fileSize,
 
-            let copied = false;
+                        key,
 
-            try {
+                        uploadId,
 
-                copied =
-                    document.execCommand("copy");
+                        partNumber
 
-            } catch (copyError) {
+                    )
 
-                console.error(
-                    "Fallback copy failed:",
-                    copyError
                 );
             }
 
-            tempInput.remove();
 
-            if (copied) {
+            const results =
+                await Promise.all(
+                    promises
+                );
 
-                if (copyBtn) {
-                    copyBtn.textContent =
-                        "Link Copied!";
+
+            completedParts.push(
+                ...results
+            );
+
+
+            console.log(
+                `Parts ${batchStart}-${batchEnd} completed.`
+            );
+        }
+
+
+        // -------------------------------------------------
+        // SORT PARTS
+        // -------------------------------------------------
+
+        completedParts.sort(
+            (a, b) =>
+                a.PartNumber -
+                b.PartNumber
+        );
+
+
+        // -------------------------------------------------
+        // COMPLETE MULTIPART UPLOAD
+        // -------------------------------------------------
+
+        console.log(
+            "Completing multipart upload..."
+        );
+
+
+        await s3.send(
+            new CompleteMultipartUploadCommand({
+
+                Bucket:
+                    BUCKET_NAME,
+
+                Key:
+                    key,
+
+                UploadId:
+                    uploadId,
+
+                MultipartUpload: {
+
+                    Parts:
+                        completedParts
+
                 }
 
-                if (copyStatus) {
-                    copyStatus.textContent =
-                        "Download link copied successfully.";
-                }
+            })
+        );
 
-            } else {
 
-                if (copyStatus) {
-                    copyStatus.textContent =
-                        "Copy failed. Please copy the link manually.";
-                }
+        console.log(
+            "Multipart upload completed."
+        );
+
+
+        return true;
+
+
+    } catch (error) {
+
+
+        // -------------------------------------------------
+        // ABORT FAILED MULTIPART UPLOAD
+        // -------------------------------------------------
+
+        if (
+            uploadId
+        ) {
+
+            try {
+
+                console.log(
+                    "Aborting failed multipart upload..."
+                );
+
+
+                await s3.send(
+                    new AbortMultipartUploadCommand({
+
+                        Bucket:
+                            BUCKET_NAME,
+
+                        Key:
+                            key,
+
+                        UploadId:
+                            uploadId
+
+                    })
+                );
+
+
+                console.log(
+                    "Multipart upload aborted."
+                );
+
+
+            } catch (
+                abortError
+            ) {
+
+                console.error(
+                    "Could not abort multipart upload:",
+                    abortError.message
+                );
             }
         }
 
-        setTimeout(() => {
 
-            if (copyBtn) {
-                copyBtn.textContent =
-                    "Copy Link";
+        throw error;
+    }
+}
+
+
+// =====================================================
+// AUTO DELETE CLEANUP
+// =====================================================
+
+async function cleanupExpiredFiles() {
+
+    try {
+
+        let continuationToken =
+            undefined;
+
+
+        do {
+
+            const result =
+                await s3.send(
+                    new ListObjectsV2Command({
+
+                        Bucket:
+                            BUCKET_NAME,
+
+                        ContinuationToken:
+                            continuationToken
+
+                    })
+                );
+
+
+            const objects =
+                result.Contents ||
+                [];
+
+
+            for (
+                const object
+                of objects
+            ) {
+
+                if (
+                    !object.Key
+                ) {
+
+                    continue;
+                }
+
+
+                try {
+
+                    const head =
+                        await s3.send(
+                            new HeadObjectCommand({
+
+                                Bucket:
+                                    BUCKET_NAME,
+
+                                Key:
+                                    object.Key
+
+                            })
+                        );
+
+
+                    const metadata =
+                        head.Metadata ||
+                        {};
+
+
+                    const deleteAt =
+                        metadata.deleteat;
+
+
+                    if (
+                        !deleteAt
+                    ) {
+
+                        continue;
+                    }
+
+
+                    const deleteTime =
+                        Number(
+                            deleteAt
+                        );
+
+
+                    if (
+                        Number.isFinite(
+                            deleteTime
+                        ) &&
+                        Date.now() >=
+                            deleteTime
+                    ) {
+
+                        console.log(
+                            "Auto deleting:",
+                            object.Key
+                        );
+
+
+                        await s3.send(
+                            new DeleteObjectCommand({
+
+                                Bucket:
+                                    BUCKET_NAME,
+
+                                Key:
+                                    object.Key
+
+                            })
+                        );
+
+
+                        console.log(
+                            "Auto delete complete:",
+                            object.Key
+                        );
+                    }
+
+
+                } catch (error) {
+
+                    console.error(
+                        "Auto-delete check failed:",
+                        object.Key,
+                        error.message
+                    );
+                }
             }
 
-        }, 2500);
-    }
+
+            continuationToken =
+                result.IsTruncated
+                    ? result.NextContinuationToken
+                    : undefined;
 
 
-    // =====================================================
-    // COPY BUTTON
-    // =====================================================
+        } while (
+            continuationToken
+        );
 
-    if (copyBtn) {
 
-        copyBtn.addEventListener(
-            "click",
-            copyDownloadLink
+    } catch (error) {
+
+        console.error(
+            "Cleanup error:",
+            error.message
         );
     }
+}
 
 
-    // =====================================================
-    // UPLOAD BUTTON
-    // =====================================================
+// =====================================================
+// START CLEANUP
+// =====================================================
 
-    uploadBtn.addEventListener(
-        "click",
-        () => {
+setInterval(
+    cleanupExpiredFiles,
+    60 *
+    1000
+);
 
-            console.log("Upload button clicked.");
 
+setTimeout(
+    cleanupExpiredFiles,
+    5000
+);
+
+
+// =====================================================
+// UPLOAD ROUTE
+// =====================================================
+
+app.post(
+    "/upload",
+
+    upload.single("file"),
+
+    async (req, res) => {
+
+        console.log("");
+        console.log(
+            "========================================"
+        );
+        console.log(
+            "UPLOAD REQUEST"
+        );
+        console.log(
+            "========================================"
+        );
+
+
+        let temporaryFilePath =
+            null;
+
+
+        try {
 
             // -------------------------------------------------
             // CHECK FILE
             // -------------------------------------------------
 
             if (
-                !fileInput.files ||
-                fileInput.files.length === 0
+                !req.file
             ) {
 
-                alert(
-                    "Please choose a file first."
-                );
+                return res
+                    .status(400)
+                    .json({
 
-                return;
+                        success:
+                            false,
+
+                        error:
+                            "No file received."
+
+                    });
             }
 
 
-            const file =
-                fileInput.files[0];
+            temporaryFilePath =
+                req.file.path;
 
+
+            // -------------------------------------------------
+            // AUTO DELETE OPTION
+            // -------------------------------------------------
+
+            const deleteAfter =
+                String(
+                    req.body.deleteAfter ||
+                    ""
+                );
+
+
+            const isAfterDownload =
+                deleteAfter ===
+                "download";
+
+
+            const isTimedDelete =
+                Object.prototype
+                    .hasOwnProperty.call(
+                        DELETE_TIMES,
+                        deleteAfter
+                    );
+
+
+            if (
+                !isAfterDownload &&
+                !isTimedDelete
+            ) {
+
+                return res
+                    .status(400)
+                    .json({
+
+                        success:
+                            false,
+
+                        error:
+                            "Invalid Auto Delete option."
+
+                    });
+            }
+
+
+            // -------------------------------------------------
+            // FILE NAME
+            // -------------------------------------------------
+
+            const cleanFileName =
+                createSafeFileName(
+                    req.file.originalname
+                );
+
+
+            const key =
+                `${Date.now()}-${cleanFileName}`;
+
+
+            // -------------------------------------------------
+            // METADATA
+            // -------------------------------------------------
+
+            const metadata =
+                {};
+
+
+            let deleteAt;
+
+
+            if (
+                isAfterDownload
+            ) {
+
+                metadata.deletemode =
+                    "after-download";
+
+
+                // Maximum 30 minutes
+                // if nobody downloads it.
+
+                deleteAt =
+                    Date.now() +
+                    (
+                        30 *
+                        60 *
+                        1000
+                    );
+
+
+                metadata.deleteat =
+                    String(
+                        deleteAt
+                    );
+
+
+            } else {
+
+                deleteAt =
+                    Date.now() +
+                    (
+                        DELETE_TIMES[
+                            deleteAfter
+                        ] *
+                        1000
+                    );
+
+
+                metadata.deletemode =
+                    "timed";
+
+
+                metadata.deleteat =
+                    String(
+                        deleteAt
+                    );
+            }
+
+
+            // -------------------------------------------------
+            // LOG
+            // -------------------------------------------------
 
             console.log(
-                "Selected file:",
-                file.name,
-                file.size,
+                "File:",
+                cleanFileName
+            );
+
+            console.log(
+                "Size:",
+                req.file.size,
                 "bytes"
             );
 
-
-            // -------------------------------------------------
-            // RESET UI
-            // -------------------------------------------------
-
-            resetDownloadArea();
-            resetProgress();
-
-
-            uploadBtn.disabled =
-                true;
-
-            setStatus(
-                "Preparing upload..."
+            console.log(
+                "MIME:",
+                req.file.mimetype
             );
-
-
-            // -------------------------------------------------
-            // FORM DATA
-            // -------------------------------------------------
-
-            const formData =
-                new FormData();
-
-            formData.append(
-                "file",
-                file
-            );
-
-            formData.append(
-                "deleteAfter",
-                deleteAfter.value
-            );
-
 
             console.log(
-                "Delete option:",
-                deleteAfter.value
+                "Auto Delete:",
+                isAfterDownload
+                    ? "After Download (Max 30 Minutes)"
+                    : new Date(
+                        deleteAt
+                    ).toLocaleString()
             );
 
 
             // -------------------------------------------------
-            // CREATE XHR
+            // MULTIPART UPLOAD
             // -------------------------------------------------
 
-            const xhr =
-                new XMLHttpRequest();
+            await uploadLargeFile(
 
+                temporaryFilePath,
 
-            xhr.open(
-                "POST",
-                "/upload",
-                true
-            );
+                key,
 
+                req.file.mimetype ||
+                    "application/octet-stream",
 
-            xhr.timeout = 0;
+                metadata
 
-
-            xhr.setRequestHeader(
-                "Accept",
-                "application/json"
             );
 
 
             // -------------------------------------------------
-            // UPLOAD PROGRESS
+            // DOWNLOAD URL
             // -------------------------------------------------
 
-            xhr.upload.addEventListener(
-                "progress",
-                (event) => {
+            const downloadUrl =
+                `/download/${encodeURIComponent(
+                    key
+                )}`;
 
-                    if (!event.lengthComputable) {
-                        return;
-                    }
 
-                    const percent =
-                        Math.round(
-                            (
-                                event.loaded /
-                                event.total
-                            ) * 100
+            console.log("");
+            console.log(
+                "========================================"
+            );
+            console.log(
+                "UPLOAD SUCCESSFUL"
+            );
+            console.log(
+                "========================================"
+            );
+
+            console.log(
+                "Download URL:",
+                downloadUrl
+            );
+
+
+            // -------------------------------------------------
+            // RESPONSE
+            // -------------------------------------------------
+
+            return res
+                .status(200)
+                .json({
+
+                    success:
+                        true,
+
+                    fileName:
+                        cleanFileName,
+
+                    key:
+                        key,
+
+                    downloadUrl:
+                        downloadUrl,
+
+                    deleteMode:
+                        isAfterDownload
+                            ? "after-download"
+                            : "timed",
+
+                    deleteAt:
+                        new Date(
+                            deleteAt
+                        ).toISOString()
+
+                });
+
+
+        } catch (error) {
+
+            console.error("");
+            console.error(
+                "========================================"
+            );
+            console.error(
+                "UPLOAD ERROR"
+            );
+            console.error(
+                "========================================"
+            );
+
+            console.error(
+                error
+            );
+
+
+            return res
+                .status(500)
+                .json({
+
+                    success:
+                        false,
+
+                    error:
+                        "Upload failed.",
+
+                    details:
+                        error.message
+
+                });
+
+
+        } finally {
+
+            // -------------------------------------------------
+            // DELETE TEMP FILE
+            // -------------------------------------------------
+
+            if (
+                temporaryFilePath
+            ) {
+
+                try {
+
+                    await fs.promises.unlink(
+                        temporaryFilePath
+                    );
+
+
+                    console.log(
+                        "Temporary upload file removed."
+                    );
+
+
+                } catch (cleanupError) {
+
+                    console.error(
+                        "Temporary file cleanup failed:",
+                        cleanupError.message
+                    );
+                }
+            }
+        }
+    }
+);
+
+
+// =====================================================
+// DOWNLOAD ROUTE
+// =====================================================
+
+app.get(
+    "/download/:key",
+    async (req, res) => {
+
+        let key = null;
+
+        let downloadCompleted =
+            false;
+
+        let afterDownloadDelete =
+            false;
+
+
+        try {
+
+            // -------------------------------------------------
+            // GET KEY
+            // -------------------------------------------------
+
+            key =
+                req.params.key;
+
+
+            if (
+                !key ||
+                typeof key !==
+                    "string"
+            ) {
+
+                return res
+                    .status(400)
+                    .send(
+                        "Invalid download link."
+                    );
+            }
+
+
+            console.log("");
+            console.log(
+                "========================================"
+            );
+            console.log(
+                "DOWNLOAD REQUEST"
+            );
+            console.log(
+                "========================================"
+            );
+
+            console.log(
+                "Requested key:",
+                key
+            );
+
+
+            // -------------------------------------------------
+            // CHECK OBJECT FIRST
+            // -------------------------------------------------
+
+            let headResult;
+
+
+            try {
+
+                headResult =
+                    await s3.send(
+                        new HeadObjectCommand({
+
+                            Bucket:
+                                BUCKET_NAME,
+
+                            Key:
+                                key
+
+                        })
+                    );
+
+
+            } catch (headError) {
+
+                console.error(
+                    "Backblaze HeadObject failed:",
+                    headError.message
+                );
+
+
+                if (
+                    headError.name ===
+                        "NotFound" ||
+                    headError.name ===
+                        "NoSuchKey" ||
+                    headError.$metadata?.httpStatusCode ===
+                        404
+                ) {
+
+                    return res
+                        .status(404)
+                        .send(
+                            "File not found. It may have expired or already been deleted."
+                        );
+                }
+
+
+                return res
+                    .status(500)
+                    .send(
+                        "Unable to locate the file."
+                    );
+            }
+
+
+            // -------------------------------------------------
+            // CHECK AUTO DELETE METADATA
+            // -------------------------------------------------
+
+            const metadata =
+                headResult.Metadata ||
+                {};
+
+
+            afterDownloadDelete =
+                metadata.deletemode ===
+                "after-download";
+
+
+            // -------------------------------------------------
+            // SAFETY CHECK FOR EXPIRED FILE
+            // -------------------------------------------------
+
+            if (
+                metadata.deleteat
+            ) {
+
+                const deleteTime =
+                    Number(
+                        metadata.deleteat
+                    );
+
+
+                if (
+                    Number.isFinite(
+                        deleteTime
+                    ) &&
+                    Date.now() >=
+                        deleteTime
+                ) {
+
+                    console.log(
+                        "File has expired."
+                    );
+
+
+                    // Delete expired object.
+
+                    try {
+
+                        await s3.send(
+                            new DeleteObjectCommand({
+
+                                Bucket:
+                                    BUCKET_NAME,
+
+                                Key:
+                                    key
+
+                            })
                         );
 
+                    } catch (
+                        deleteError
+                    ) {
 
-                    if (progressBar) {
-
-                        progressBar.style.width =
-                            percent + "%";
-                    }
-
-
-                    if (progressText) {
-
-                        progressText.textContent =
-                            percent + "%";
-                    }
-
-
-                    if (percent < 100) {
-
-                        setStatus(
-                            "Uploading... " +
-                            percent +
-                            "%"
+                        console.error(
+                            "Expired-file deletion failed:",
+                            deleteError.message
                         );
+                    }
 
-                    } else {
 
-                        setStatus(
-                            "File received. Finalizing upload..."
+                    return res
+                        .status(410)
+                        .send(
+                            "This file has expired and is no longer available."
+                        );
+                }
+            }
+
+
+            // -------------------------------------------------
+            // GET OBJECT
+            // -------------------------------------------------
+
+            let objectResult;
+
+
+            try {
+
+                objectResult =
+                    await s3.send(
+                        new GetObjectCommand({
+
+                            Bucket:
+                                BUCKET_NAME,
+
+                            Key:
+                                key
+
+                        })
+                    );
+
+
+            } catch (getError) {
+
+                console.error(
+                    "Backblaze GetObject failed:",
+                    getError
+                );
+
+
+                if (
+                    getError.name ===
+                        "NoSuchKey" ||
+                    getError.name ===
+                        "NotFound" ||
+                    getError.$metadata?.httpStatusCode ===
+                        404
+                ) {
+
+                    return res
+                        .status(404)
+                        .send(
+                            "File not found. It may have expired or already been deleted."
+                        );
+                }
+
+
+                return res
+                    .status(500)
+                    .send(
+                        "Download failed because the storage service could not provide the file."
+                    );
+            }
+
+
+            // -------------------------------------------------
+            // CHECK BODY
+            // -------------------------------------------------
+
+            if (
+                !objectResult.Body
+            ) {
+
+                console.error(
+                    "Backblaze returned an empty response body."
+                );
+
+
+                return res
+                    .status(500)
+                    .send(
+                        "Download failed because the file data was empty."
+                    );
+            }
+
+
+            // -------------------------------------------------
+            // ORIGINAL FILE NAME
+            // -------------------------------------------------
+
+            let originalFileName =
+                path.basename(
+                    key
+                );
+
+
+            // Remove timestamp prefix.
+
+            originalFileName =
+                originalFileName.replace(
+                    /^\d+-/,
+                    ""
+                );
+
+
+            // -------------------------------------------------
+            // SAFER CONTENT DISPOSITION
+            // -------------------------------------------------
+
+            const encodedFileName =
+                encodeURIComponent(
+                    originalFileName
+                );
+
+
+            // -------------------------------------------------
+            // RESPONSE HEADERS
+            // -------------------------------------------------
+
+            res.statusCode =
+                200;
+
+
+            res.setHeader(
+                "Content-Type",
+                objectResult.ContentType ||
+                    "application/octet-stream"
+            );
+
+
+            if (
+                objectResult.ContentLength !==
+                undefined &&
+                objectResult.ContentLength !==
+                null
+            ) {
+
+                res.setHeader(
+                    "Content-Length",
+                    String(
+                        objectResult.ContentLength
+                    )
+                );
+            }
+
+
+            res.setHeader(
+                "Content-Disposition",
+                `attachment; filename="${originalFileName.replace(/"/g, "")}"; filename*=UTF-8''${encodedFileName}`
+            );
+
+
+            // Prevent browsers/proxies from caching
+            // an already-expired download.
+
+            res.setHeader(
+                "Cache-Control",
+                "no-store, no-cache, must-revalidate, private"
+            );
+
+
+            res.setHeader(
+                "Pragma",
+                "no-cache"
+            );
+
+
+            res.setHeader(
+                "Expires",
+                "0"
+            );
+
+
+            res.setHeader(
+                "X-Content-Type-Options",
+                "nosniff"
+            );
+
+
+            // -------------------------------------------------
+            // DOWNLOAD FINISHED
+            // -------------------------------------------------
+
+            res.once(
+                "finish",
+                () => {
+
+                    downloadCompleted =
+                        true;
+
+
+                    console.log(
+                        "Download response finished:",
+                        key
+                    );
+                }
+            );
+
+
+            // -------------------------------------------------
+            // CLIENT CLOSED CONNECTION
+            // -------------------------------------------------
+
+            res.once(
+                "close",
+                () => {
+
+                    if (
+                        !downloadCompleted
+                    ) {
+
+                        console.warn(
+                            "Download connection closed before completion:",
+                            key
                         );
                     }
                 }
@@ -563,155 +1690,33 @@ document.addEventListener("DOMContentLoaded", () => {
 
 
             // -------------------------------------------------
-            // SUCCESS / SERVER RESPONSE
+            // STREAM ERROR
             // -------------------------------------------------
 
-            xhr.addEventListener(
-                "load",
-                () => {
+            objectResult.Body.on(
+                "error",
+                (streamError) => {
 
-                    uploadBtn.disabled =
-                        false;
-
-
-                    console.log(
-                        "Server status:",
-                        xhr.status
-                    );
-
-                    console.log(
-                        "Server response:",
-                        xhr.responseText
+                    console.error(
+                        "Backblaze download stream error:",
+                        streamError
                     );
 
 
                     if (
-                        xhr.status >= 200 &&
-                        xhr.status < 300
+                        !res.headersSent
                     ) {
 
-                        if (progressBar) {
-                            progressBar.style.width =
-                                "100%";
-                        }
-
-                        if (progressText) {
-                            progressText.textContent =
-                                "100%";
-                        }
-
-
-                        let response;
-
-                        try {
-
-                            response =
-                                JSON.parse(
-                                    xhr.responseText
-                                );
-
-                        } catch (error) {
-
-                            console.error(
-                                "Invalid JSON:",
-                                error
+                        res
+                            .status(500)
+                            .send(
+                                "Download failed while reading the file."
                             );
 
-                            setStatus(
-                                "Upload completed, but the server returned an invalid response."
-                            );
+                    } else {
 
-                            return;
-                        }
-
-
-                        console.log(
-                            "Parsed response:",
-                            response
-                        );
-
-
-                        if (
-                            response.success === false
-                        ) {
-
-                            setStatus(
-                                response.error ||
-                                "Upload failed."
-                            );
-
-                            return;
-                        }
-
-
-                        setStatus(
-                            "Upload complete!"
-                        );
-
-
-                        showDownloadLink(
-                            response
-                        );
-
-
-                        if (downloadResult) {
-
-                            setTimeout(() => {
-
-                                downloadResult.scrollIntoView({
-                                    behavior: "smooth",
-                                    block: "center"
-                                });
-
-                            }, 200);
-                        }
-                    }
-
-
-                    // -------------------------------------------------
-                    // SERVER ERROR
-                    // -------------------------------------------------
-
-                    else {
-
-                        let errorMessage =
-                            "Upload failed.";
-
-                        try {
-
-                            const errorResponse =
-                                JSON.parse(
-                                    xhr.responseText
-                                );
-
-                            if (
-                                errorResponse.error
-                            ) {
-
-                                errorMessage =
-                                    errorResponse.error;
-                            }
-
-                            if (
-                                errorResponse.details
-                            ) {
-
-                                errorMessage +=
-                                    " " +
-                                    errorResponse.details;
-                            }
-
-                        } catch (error) {
-
-                            console.error(
-                                "Error response was not JSON:",
-                                error
-                            );
-                        }
-
-
-                        setStatus(
-                            errorMessage
+                        res.destroy(
+                            streamError
                         );
                     }
                 }
@@ -719,114 +1724,309 @@ document.addEventListener("DOMContentLoaded", () => {
 
 
             // -------------------------------------------------
-            // NETWORK ERROR
+            // PIPE BACKBLAZE STREAM TO CLIENT
             // -------------------------------------------------
 
-            xhr.addEventListener(
-                "error",
-                () => {
+            await new Promise(
+                (resolve, reject) => {
 
-                    uploadBtn.disabled =
-                        false;
+                    pipeline(
+                        objectResult.Body,
+                        res,
+                        (error) => {
 
-                    setStatus(
-                        "Upload failed because of a network error."
-                    );
+                            if (
+                                error
+                            ) {
 
-                    console.error(
-                        "XHR network error."
-                    );
-                }
-            );
+                                console.error(
+                                    "Download pipeline error:",
+                                    error
+                                );
 
+                                reject(
+                                    error
+                                );
 
-            // -------------------------------------------------
-            // ABORT
-            // -------------------------------------------------
+                            } else {
 
-            xhr.addEventListener(
-                "abort",
-                () => {
-
-                    uploadBtn.disabled =
-                        false;
-
-                    setStatus(
-                        "Upload was cancelled."
+                                resolve();
+                            }
+                        }
                     );
                 }
             );
 
 
             // -------------------------------------------------
-            // TIMEOUT
+            // DELETE AFTER SUCCESSFUL DOWNLOAD
             // -------------------------------------------------
-
-            xhr.addEventListener(
-                "timeout",
-                () => {
-
-                    uploadBtn.disabled =
-                        false;
-
-                    setStatus(
-                        "Upload timed out. Please try again."
-                    );
-                }
-            );
-
-
-            // -------------------------------------------------
-            // SEND UPLOAD
-            // -------------------------------------------------
-
-            console.log(
-                "Sending upload request to /upload..."
-            );
-
-            xhr.send(
-                formData
-            );
-        }
-    );
-
-
-    // =====================================================
-    // FILE SELECTION
-    // =====================================================
-
-    fileInput.addEventListener(
-        "change",
-        () => {
-
-            resetDownloadArea();
-            resetProgress();
 
             if (
-                fileInput.files &&
-                fileInput.files.length > 0
+                afterDownloadDelete &&
+                downloadCompleted
             ) {
 
-                setStatus(
-                    "Ready to upload."
+                console.log(
+                    "Deleting after successful download:",
+                    key
                 );
 
-                console.log(
-                    "File selected:",
-                    fileInput.files[0].name
+
+                try {
+
+                    await s3.send(
+                        new DeleteObjectCommand({
+
+                            Bucket:
+                                BUCKET_NAME,
+
+                            Key:
+                                key
+
+                        })
+                    );
+
+
+                    console.log(
+                        "File deleted after download:",
+                        key
+                    );
+
+
+                } catch (deleteError) {
+
+                    console.error(
+                        "After-download deletion failed:",
+                        deleteError.message
+                    );
+                }
+            }
+
+
+        } catch (error) {
+
+            console.error("");
+            console.error(
+                "========================================"
+            );
+            console.error(
+                "DOWNLOAD ERROR"
+            );
+            console.error(
+                "========================================"
+            );
+
+            console.error(
+                error
+            );
+
+
+            if (
+                !res.headersSent
+            ) {
+
+                return res
+                    .status(500)
+                    .send(
+                        "Download failed."
+                    );
+            }
+
+
+            if (
+                !res.destroyed
+            ) {
+
+                res.destroy(
+                    error
                 );
             }
         }
-    );
+    }
+);
 
 
-    // =====================================================
-    // INITIAL STATE
-    // =====================================================
+// =====================================================
+// MULTER ERROR HANDLER
+// =====================================================
 
-    resetProgress();
+app.use(
+    (
+        error,
+        req,
+        res,
+        next
+    ) => {
 
-    console.log(
-        "FileShare frontend initialized successfully."
-    );
-});
+        if (
+            error instanceof
+            multer.MulterError
+        ) {
+
+            console.error(
+                "Multer error:",
+                error.message
+            );
+
+
+            return res
+                .status(400)
+                .json({
+
+                    success:
+                        false,
+
+                    error:
+                        "Upload error.",
+
+                    details:
+                        error.message
+
+                });
+        }
+
+
+        next(
+            error
+        );
+    }
+);
+
+
+// =====================================================
+// GENERAL ERROR HANDLER
+// =====================================================
+
+app.use(
+    (
+        error,
+        req,
+        res,
+        next
+    ) => {
+
+        console.error(
+            "SERVER ERROR:",
+            error
+        );
+
+
+        if (
+            !res.headersSent
+        ) {
+
+            return res
+                .status(500)
+                .json({
+
+                    success:
+                        false,
+
+                    error:
+                        "Server error.",
+
+                    details:
+                        error.message
+
+                });
+        }
+
+
+        next(
+            error
+        );
+    }
+);
+
+
+// =====================================================
+// START SERVER
+// =====================================================
+
+app.listen(
+    PORT,
+    () => {
+
+        console.log("");
+        console.log(
+            "========================================"
+        );
+        console.log(
+            "FILESHARE SERVER RUNNING"
+        );
+        console.log(
+            "========================================"
+        );
+
+        console.log(
+            `Port: ${PORT}`
+        );
+
+        console.log(
+            `Frontend: ${projectDirectory}`
+        );
+
+        console.log(
+            `QR: ${path.join(
+                projectDirectory,
+                "GooglePay_QR.png"
+            )}`
+        );
+
+        console.log("");
+
+        console.log(
+            "Backblaze:",
+            "CONFIGURED"
+        );
+
+        console.log(
+            "Multipart upload:",
+            "ENABLED"
+        );
+
+        console.log(
+            "Part size:",
+            "10 MB"
+        );
+
+        console.log(
+            "Concurrent parts:",
+            "20"
+        );
+
+        console.log(
+            "Auto Delete:",
+            "ENABLED"
+        );
+
+        console.log("");
+
+        console.log(
+            "Options:"
+        );
+
+        console.log(
+            "10 Minutes"
+        );
+
+        console.log(
+            "30 Minutes"
+        );
+
+        console.log(
+            "1 Hour"
+        );
+
+        console.log(
+            "After Download (Max 30 Minutes)"
+        );
+
+        console.log("");
+
+        console.log(
+            "========================================"
+        );
+    }
+);
