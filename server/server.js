@@ -22,47 +22,32 @@ dotenv.config();
 
 const app = express();
 
-const PORT =
-    process.env.PORT || 3000;
+const PORT = process.env.PORT || 3000;
 
 
 // =====================================================
 // BACKBLAZE CONFIGURATION
 // =====================================================
 
-const REGION =
-    process.env.B2_REGION;
-
-const ENDPOINT =
-    process.env.B2_ENDPOINT;
-
-const KEY_ID =
-    process.env.B2_KEY_ID;
-
-const APPLICATION_KEY =
-    process.env.B2_APPLICATION_KEY;
-
-const BUCKET_NAME =
-    process.env.B2_BUCKET_NAME;
+const REGION = process.env.B2_REGION;
+const ENDPOINT = process.env.B2_ENDPOINT;
+const KEY_ID = process.env.B2_KEY_ID;
+const APPLICATION_KEY = process.env.B2_APPLICATION_KEY;
+const BUCKET_NAME = process.env.B2_BUCKET_NAME;
 
 
 // =====================================================
 // CLOUDFLARE WORKER DOWNLOAD URL
 // =====================================================
 //
-// IMPORTANT:
-// Do NOT add a trailing slash.
+// CURRENT WORKER URL:
 //
-// Working Worker:
-// https://young-queen-e763.workers.dev
+// https://young-queen-e763.abhijeetshuklase.workers.dev
 //
 // =====================================================
 
 const CLOUDFLARE_DOWNLOAD_DOMAIN =
-    (
-        process.env.CLOUDFLARE_DOWNLOAD_DOMAIN ||
-        "https://young-queen-e763.workers.dev"
-    ).replace(/\/+$/, "");
+    "https://young-queen-e763.abhijeetshuklase.workers.dev";
 
 
 // =====================================================
@@ -76,13 +61,12 @@ if (
     !APPLICATION_KEY ||
     !BUCKET_NAME
 ) {
-
     console.error("");
     console.error("========================================");
     console.error("MISSING BACKBLAZE CONFIGURATION");
     console.error("========================================");
     console.error("");
-    console.error("Required:");
+    console.error("Required environment variables:");
     console.error("B2_REGION");
     console.error("B2_ENDPOINT");
     console.error("B2_KEY_ID");
@@ -98,98 +82,69 @@ if (
 // BACKBLAZE S3 CLIENT
 // =====================================================
 
-const s3 =
-    new S3Client({
+const s3 = new S3Client({
+    region: REGION,
 
-        region:
-            REGION,
+    endpoint: ENDPOINT,
 
-        endpoint:
-            ENDPOINT,
+    credentials: {
+        accessKeyId: KEY_ID,
+        secretAccessKey: APPLICATION_KEY
+    },
 
-        credentials: {
+    forcePathStyle: true,
 
-            accessKeyId:
-                KEY_ID,
+    maxAttempts: 5,
 
-            secretAccessKey:
-                APPLICATION_KEY
-        },
+    requestChecksumCalculation: "WHEN_REQUIRED",
 
-        forcePathStyle:
-            true,
-
-        maxAttempts:
-            5,
-
-        requestChecksumCalculation:
-            "WHEN_REQUIRED",
-
-        responseChecksumValidation:
-            "WHEN_REQUIRED"
-    });
+    responseChecksumValidation: "WHEN_REQUIRED"
+});
 
 
 // =====================================================
 // FRONTEND
 // =====================================================
 
-const frontendPath =
-    path.resolve(
-        __dirname,
-        ".."
-    );
+const frontendPath = path.resolve(__dirname, "..");
 
-
-app.use(
-    express.static(
-        frontendPath
-    )
-);
+app.use(express.static(frontendPath));
 
 
 // =====================================================
 // HOME
 // =====================================================
 
-app.get(
-    "/",
-    (req, res) => {
+app.get("/", (req, res) => {
 
-        res.sendFile(
-            path.join(
-                frontendPath,
-                "index.html"
-            )
-        );
+    const indexPath =
+        path.join(frontendPath, "index.html");
+
+    if (fs.existsSync(indexPath)) {
+
+        return res.sendFile(indexPath);
+
     }
-);
+
+    return res.send(
+        "FileShare server is running."
+    );
+});
 
 
 // =====================================================
-// HEALTH
+// HEALTH CHECK
 // =====================================================
 
-app.get(
-    "/health",
-    (req, res) => {
+app.get("/health", (req, res) => {
 
-        res.json({
-
-            status:
-                "OK",
-
-            server:
-                "FileShare",
-
-            backblaze:
-                "configured",
-
-            cloudflare:
-                "configured"
-        });
-    }
-);
+    res.json({
+        status: "OK",
+        server: "FileShare",
+        backblaze: "configured",
+        cloudflare: CLOUDFLARE_DOWNLOAD_DOMAIN
+    });
+});
 
 
 // =====================================================
@@ -219,18 +174,12 @@ const tempDirectory =
         "fileshare-uploads"
     );
 
-
-if (
-    !fs.existsSync(
-        tempDirectory
-    )
-) {
+if (!fs.existsSync(tempDirectory)) {
 
     fs.mkdirSync(
         tempDirectory,
         {
-            recursive:
-                true
+            recursive: true
         }
     );
 }
@@ -243,36 +192,32 @@ if (
 const storage =
     multer.diskStorage({
 
-        destination:
-            (req, file, cb) => {
+        destination: (req, file, cb) => {
 
-                cb(
-                    null,
-                    tempDirectory
-                );
-            },
+            cb(
+                null,
+                tempDirectory
+            );
+        },
 
-        filename:
-            (req, file, cb) => {
+        filename: (req, file, cb) => {
 
-                const uniqueName =
-                    `${Date.now()}-${Math.random()
-                        .toString(36)
-                        .substring(2, 14)}`;
+            const uniqueName =
+                `${Date.now()}-${Math.random()
+                    .toString(36)
+                    .substring(2, 14)}`;
 
-                cb(
-                    null,
-                    uniqueName
-                );
-            }
+            cb(
+                null,
+                uniqueName
+            );
+        }
     });
 
 
 const upload =
     multer({
-
-        storage:
-            storage
+        storage: storage
     });
 
 
@@ -280,33 +225,22 @@ const upload =
 // MULTIPART SETTINGS
 // =====================================================
 
-// 10 MB per part
-
 const PART_SIZE =
     10 *
     1024 *
     1024;
 
-
-// 10 parts simultaneously
-// Keeps Render memory/network usage reasonable.
-
-const CONCURRENT_PARTS =
-    10;
+const CONCURRENT_PARTS = 10;
 
 
 // =====================================================
 // SAFE FILE NAME
 // =====================================================
 
-function safeFileName(
-    originalName
-) {
+function safeFileName(originalName) {
 
     return path
-        .basename(
-            originalName
-        )
+        .basename(originalName)
         .replace(
             /[<>:"/\\|?*\x00-\x1F]/g,
             "_"
@@ -327,40 +261,26 @@ async function uploadSinglePart(
 ) {
 
     const start =
-        (
-            partNumber -
-            1
-        ) *
+        (partNumber - 1) *
         PART_SIZE;
-
 
     const end =
         Math.min(
-            start +
-            PART_SIZE,
+            start + PART_SIZE,
             fileSize
         );
 
-
     const contentLength =
-        end -
-        start;
-
+        end - start;
 
     const stream =
         fs.createReadStream(
             filePath,
             {
-
-                start:
-                    start,
-
-                end:
-                    end -
-                    1
+                start: start,
+                end: end - 1
             }
         );
-
 
     try {
 
@@ -388,21 +308,16 @@ async function uploadSinglePart(
                 })
             );
 
-
-        if (
-            !result.ETag
-        ) {
+        if (!result.ETag) {
 
             throw new Error(
                 `Part ${partNumber} did not return ETag.`
             );
         }
 
-
         console.log(
             `Part ${partNumber} uploaded.`
         );
-
 
         return {
 
@@ -412,7 +327,6 @@ async function uploadSinglePart(
             ETag:
                 result.ETag
         };
-
 
     } catch (error) {
 
@@ -434,9 +348,7 @@ async function uploadLargeFile(
     metadata
 ) {
 
-    let uploadId =
-        null;
-
+    let uploadId = null;
 
     try {
 
@@ -452,9 +364,7 @@ async function uploadLargeFile(
         );
 
 
-        // -------------------------------------------------
         // CREATE MULTIPART UPLOAD
-        // -------------------------------------------------
 
         const createResult =
             await s3.send(
@@ -474,14 +384,10 @@ async function uploadLargeFile(
                 })
             );
 
-
         uploadId =
             createResult.UploadId;
 
-
-        if (
-            !uploadId
-        ) {
+        if (!uploadId) {
 
             throw new Error(
                 "Backblaze did not return UploadId."
@@ -489,19 +395,15 @@ async function uploadLargeFile(
         }
 
 
-        // -------------------------------------------------
         // FILE SIZE
-        // -------------------------------------------------
 
         const stats =
             await fs.promises.stat(
                 filePath
             );
 
-
         const fileSize =
             stats.size;
-
 
         const totalParts =
             Math.ceil(
@@ -509,12 +411,10 @@ async function uploadLargeFile(
                 PART_SIZE
             );
 
-
         console.log(
             "File size:",
             fileSize
         );
-
 
         console.log(
             "Total parts:",
@@ -522,33 +422,20 @@ async function uploadLargeFile(
         );
 
 
-        console.log(
-            "Concurrent parts:",
-            CONCURRENT_PARTS
-        );
-
-
-        // -------------------------------------------------
         // UPLOAD PARTS
-        // -------------------------------------------------
 
-        const completedParts =
-            [];
-
+        const completedParts = [];
 
         for (
             let batchStart = 1;
 
-            batchStart <=
-                totalParts;
+            batchStart <= totalParts;
 
-            batchStart +=
-                CONCURRENT_PARTS
+            batchStart += CONCURRENT_PARTS
         ) {
 
             const batchEnd =
                 Math.min(
-
                     batchStart +
                     CONCURRENT_PARTS -
                     1,
@@ -556,49 +443,35 @@ async function uploadLargeFile(
                     totalParts
                 );
 
-
             console.log(
                 `Uploading parts ${batchStart}-${batchEnd}/${totalParts}`
             );
 
-
-            const promises =
-                [];
-
+            const promises = [];
 
             for (
-                let partNumber =
-                    batchStart;
+                let partNumber = batchStart;
 
-                partNumber <=
-                    batchEnd;
+                partNumber <= batchEnd;
 
                 partNumber++
             ) {
 
                 promises.push(
-
                     uploadSinglePart(
-
                         filePath,
-
                         fileSize,
-
                         key,
-
                         uploadId,
-
                         partNumber
                     )
                 );
             }
 
-
             const results =
                 await Promise.all(
                     promises
                 );
-
 
             completedParts.push(
                 ...results
@@ -606,9 +479,7 @@ async function uploadLargeFile(
         }
 
 
-        // -------------------------------------------------
         // SORT PARTS
-        // -------------------------------------------------
 
         completedParts.sort(
             (a, b) =>
@@ -617,9 +488,7 @@ async function uploadLargeFile(
         );
 
 
-        // -------------------------------------------------
-        // COMPLETE
-        // -------------------------------------------------
+        // COMPLETE MULTIPART UPLOAD
 
         await s3.send(
             new CompleteMultipartUploadCommand({
@@ -641,21 +510,13 @@ async function uploadLargeFile(
             })
         );
 
-
         console.log(
             "Multipart upload completed successfully."
         );
 
-
     } catch (error) {
 
-        // -------------------------------------------------
-        // ABORT FAILED UPLOAD
-        // -------------------------------------------------
-
-        if (
-            uploadId
-        ) {
+        if (uploadId) {
 
             try {
 
@@ -673,12 +534,6 @@ async function uploadLargeFile(
                     })
                 );
 
-
-                console.log(
-                    "Failed multipart upload aborted."
-                );
-
-
             } catch (abortError) {
 
                 console.error(
@@ -687,7 +542,6 @@ async function uploadLargeFile(
                 );
             }
         }
-
 
         throw error;
     }
@@ -702,9 +556,7 @@ async function cleanupExpiredFiles() {
 
     try {
 
-        let token =
-            undefined;
-
+        let token = undefined;
 
         do {
 
@@ -720,24 +572,17 @@ async function cleanupExpiredFiles() {
                     })
                 );
 
-
             const objects =
-                result.Contents ||
-                [];
-
+                result.Contents || [];
 
             for (
                 const object
                 of objects
             ) {
 
-                if (
-                    !object.Key
-                ) {
-
+                if (!object.Key) {
                     continue;
                 }
-
 
                 try {
 
@@ -753,39 +598,27 @@ async function cleanupExpiredFiles() {
                             })
                         );
 
-
                     const metadata =
-                        head.Metadata ||
-                        {};
+                        head.Metadata || {};
 
-
-                    if (
-                        !metadata.deleteat
-                    ) {
-
+                    if (!metadata.deleteat) {
                         continue;
                     }
-
 
                     const deleteTime =
                         Number(
                             metadata.deleteat
                         );
 
-
                     if (
-                        Number.isFinite(
-                            deleteTime
-                        ) &&
-                        Date.now() >=
-                            deleteTime
+                        Number.isFinite(deleteTime) &&
+                        Date.now() >= deleteTime
                     ) {
 
                         console.log(
                             "Auto deleting:",
                             object.Key
                         );
-
 
                         await s3.send(
                             new DeleteObjectCommand({
@@ -798,13 +631,11 @@ async function cleanupExpiredFiles() {
                             })
                         );
 
-
                         console.log(
                             "Auto delete successful:",
                             object.Key
                         );
                     }
-
 
                 } catch (error) {
 
@@ -816,17 +647,12 @@ async function cleanupExpiredFiles() {
                 }
             }
 
-
             token =
                 result.IsTruncated
                     ? result.NextContinuationToken
                     : undefined;
 
-
-        } while (
-            token
-        );
-
+        } while (token);
 
     } catch (error) {
 
@@ -844,10 +670,8 @@ async function cleanupExpiredFiles() {
 
 setInterval(
     cleanupExpiredFiles,
-    60 *
-    1000
+    60 * 1000
 );
-
 
 setTimeout(
     cleanupExpiredFiles,
@@ -866,9 +690,7 @@ app.post(
 
     async (req, res) => {
 
-        let temporaryFilePath =
-            null;
-
+        let temporaryFilePath = null;
 
         try {
 
@@ -884,13 +706,9 @@ app.post(
             );
 
 
-            // -------------------------------------------------
             // CHECK FILE
-            // -------------------------------------------------
 
-            if (
-                !req.file
-            ) {
+            if (!req.file) {
 
                 return res
                     .status(400)
@@ -904,34 +722,25 @@ app.post(
                     });
             }
 
-
             temporaryFilePath =
                 req.file.path;
 
 
-            // -------------------------------------------------
             // DELETE OPTION
-            // -------------------------------------------------
 
             const deleteAfter =
                 String(
-                    req.body.deleteAfter ||
-                    ""
+                    req.body.deleteAfter || ""
                 );
 
-
             const isAfterDownload =
-                deleteAfter ===
-                "download";
-
+                deleteAfter === "download";
 
             const isTimed =
-                Object.prototype
-                    .hasOwnProperty.call(
-                        DELETE_TIMES,
-                        deleteAfter
-                    );
-
+                Object.prototype.hasOwnProperty.call(
+                    DELETE_TIMES,
+                    deleteAfter
+                );
 
             if (
                 !isAfterDownload &&
@@ -951,9 +760,7 @@ app.post(
             }
 
 
-            // -------------------------------------------------
             // FILE NAME
-            // -------------------------------------------------
 
             const fileName =
                 safeFileName(
@@ -961,55 +768,39 @@ app.post(
                 );
 
 
+            // UNIQUE BACKBLAZE KEY
+
             const key =
                 `${Date.now()}-${fileName}`;
 
 
-            // -------------------------------------------------
             // METADATA
-            // -------------------------------------------------
 
-            const metadata =
-                {};
-
+            const metadata = {};
 
             let deleteAt;
 
 
-            if (
-                isAfterDownload
-            ) {
+            if (isAfterDownload) {
 
-                // The Worker handles the actual download,
-                // so Render cannot reliably detect completion.
-                //
-                // Therefore this option means:
-                // delete after maximum 30 minutes.
+                // Worker handles the actual download.
+                // Use 30 minutes as the maximum lifetime.
 
                 deleteAt =
                     Date.now() +
-                    (
-                        30 *
-                        60 *
-                        1000
-                    );
-
+                    30 *
+                    60 *
+                    1000;
 
                 metadata.deletemode =
                     "after-download";
-
 
             } else {
 
                 deleteAt =
                     Date.now() +
-                    (
-                        DELETE_TIMES[
-                            deleteAfter
-                        ] *
-                        1000
-                    );
-
+                    DELETE_TIMES[deleteAfter] *
+                    1000;
 
                 metadata.deletemode =
                     "timed";
@@ -1017,44 +808,33 @@ app.post(
 
 
             metadata.deleteat =
-                String(
-                    deleteAt
-                );
+                String(deleteAt);
 
 
-            // -------------------------------------------------
             // LOG
-            // -------------------------------------------------
 
             console.log(
                 "File:",
                 fileName
             );
 
-
             console.log(
                 "Size:",
                 req.file.size
             );
-
 
             console.log(
                 "Delete mode:",
                 metadata.deletemode
             );
 
-
             console.log(
                 "Delete at:",
-                new Date(
-                    deleteAt
-                ).toISOString()
+                new Date(deleteAt).toISOString()
             );
 
 
-            // -------------------------------------------------
             // UPLOAD TO BACKBLAZE
-            // -------------------------------------------------
 
             await uploadLargeFile(
 
@@ -1069,30 +849,12 @@ app.post(
             );
 
 
-            // -------------------------------------------------
-            // CLOUDFLARE WORKER DOWNLOAD URL
-            // -------------------------------------------------
-            //
-            // IMPORTANT:
-            // This is now the actual download URL.
-            //
-            // Render does NOT stream the file.
-            //
-            // Flow:
-            //
-            // User
-            //   ↓
-            // Cloudflare Worker
-            //   ↓
-            // Private Backblaze
-            //
-            // -------------------------------------------------
+            // =================================================
+            // CLOUDFLARE DOWNLOAD URL
+            // =================================================
 
             const encodedKey =
-                encodeURIComponent(
-                    key
-                );
-
+                encodeURIComponent(key);
 
             const downloadUrl =
                 `${CLOUDFLARE_DOWNLOAD_DOMAIN}/file/${encodedKey}`;
@@ -1109,22 +871,18 @@ app.post(
                 "========================================"
             );
 
-
             console.log(
-                "Key:",
+                "Backblaze Key:",
                 key
             );
 
-
             console.log(
-                "Cloudflare Download URL:",
+                "Download URL:",
                 downloadUrl
             );
 
 
-            // -------------------------------------------------
             // RESPONSE
-            // -------------------------------------------------
 
             return res
                 .status(200)
@@ -1170,18 +928,15 @@ app.post(
                 "========================================"
             );
 
-
             console.error(
                 "Name:",
                 error.name
             );
 
-
             console.error(
                 "Message:",
                 error.message
             );
-
 
             console.error(
                 "Code:",
@@ -1190,7 +945,6 @@ app.post(
                 "N/A"
             );
 
-
             console.error(
                 "HTTP:",
                 error.$metadata?.httpStatusCode ||
@@ -1198,9 +952,7 @@ app.post(
             );
 
 
-            if (
-                !res.headersSent
-            ) {
+            if (!res.headersSent) {
 
                 return res
                     .status(500)
@@ -1217,23 +969,17 @@ app.post(
                     });
             }
 
-
         } finally {
 
-            // -------------------------------------------------
             // DELETE TEMPORARY FILE
-            // -------------------------------------------------
 
-            if (
-                temporaryFilePath
-            ) {
+            if (temporaryFilePath) {
 
                 try {
 
                     await fs.promises.unlink(
                         temporaryFilePath
                     );
-
 
                 } catch (error) {
 
@@ -1251,15 +997,6 @@ app.post(
 // =====================================================
 // OLD DOWNLOAD ROUTE
 // =====================================================
-//
-// Kept as a compatibility fallback.
-//
-// IMPORTANT:
-// New upload responses DO NOT use this route.
-//
-// New downloads go directly to Cloudflare Worker.
-//
-// =====================================================
 
 app.get(
     "/download/:key",
@@ -1269,10 +1006,7 @@ app.get(
         const key =
             req.params.key;
 
-
-        if (
-            !key
-        ) {
+        if (!key) {
 
             return res
                 .status(400)
@@ -1281,20 +1015,13 @@ app.get(
                 );
         }
 
-
-        // Redirect old links to Cloudflare Worker.
-
         const downloadUrl =
-            `${CLOUDFLARE_DOWNLOAD_DOMAIN}/file/${encodeURIComponent(
-                key
-            )}`;
-
+            `${CLOUDFLARE_DOWNLOAD_DOMAIN}/file/${encodeURIComponent(key)}`;
 
         console.log(
-            "Redirecting old download URL to Cloudflare:",
+            "Redirecting to:",
             downloadUrl
         );
-
 
         return res.redirect(
             302,
@@ -1326,7 +1053,6 @@ app.use(
                 error.message
             );
 
-
             return res
                 .status(400)
                 .json({
@@ -1342,10 +1068,7 @@ app.use(
                 });
         }
 
-
-        next(
-            error
-        );
+        next(error);
     }
 );
 
@@ -1367,10 +1090,7 @@ app.use(
             error
         );
 
-
-        if (
-            !res.headersSent
-        ) {
+        if (!res.headersSent) {
 
             return res
                 .status(500)
@@ -1387,10 +1107,7 @@ app.use(
                 });
         }
 
-
-        next(
-            error
-        );
+        next(error);
     }
 );
 
@@ -1401,48 +1118,45 @@ app.use(
 
 app.listen(
     PORT,
+
     () => {
 
         console.log("");
         console.log(
             "========================================"
         );
+
         console.log(
             "FILESHARE SERVER RUNNING"
         );
+
         console.log(
             "========================================"
         );
 
-
         console.log(
             `Port: ${PORT}`
         );
-
 
         console.log(
             "Multipart:",
             "10 MB parts / 10 concurrent"
         );
 
-
         console.log(
             "Backblaze:",
             "PRIVATE BUCKET"
         );
-
 
         console.log(
             "Cloudflare Downloads:",
             CLOUDFLARE_DOWNLOAD_DOMAIN
         );
 
-
         console.log(
             "Auto Delete:",
             "ENABLED"
         );
-
 
         console.log(
             "========================================"
